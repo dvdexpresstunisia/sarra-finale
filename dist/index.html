@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- SÉCURITÉ: CSP stricte — aucun script distant, pas d'objets/frames, connexions limitées au local. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data:; script-src 'self' file:; style-src 'self' 'unsafe-inline' file:; img-src 'self' data: blob: file:; font-src 'self' data:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.elevenlabs.io https://api.groq.com https://openrouter.ai http://localhost:3000 http://127.0.0.1:3000 http://localhost:5173 http://127.0.0.1:5173 ws://localhost:5173 ws://127.0.0.1:5173; media-src 'self' blob: https://api.elevenlabs.io; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'">
+    <title>Sarra-Final Avatar</title>
+    <style>
+        /* OVERLAY APP CORRECTION: Click-through via CSS uniquement. */
+        html, body {
+            width: 100vw;
+            height: 100vh;
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            pointer-events: none;  /* Fond transparent = click-through */
+            overflow: hidden;
+        }
+
+        body { 
+            font-family: sans-serif; 
+        }
+
+        /* Ces éléments captent les clics malgré le fond transparent. */
+        #avatar-container, #config-panel, #mic-btn {
+            pointer-events: auto;
+        }
+
+        /* OVERLAY APP CORRECTION: dimensions explicites du conteneur de l'avatar. */
+        #avatar-container {
+            width: 400px;
+            height: 400px;
+            position: absolute;
+            left: 100px;
+            top: 100px;
+            pointer-events: auto;
+            /* Curseur piloté en JS selon la position Y de la souris (haut = drag, bas = resize). */
+            cursor: grab;
+        }
+
+        /* OVERLAY APP CORRECTION: le canvas remplit le conteneur de l'avatar. */
+        #scene { width: 100%; height: 100%; }
+
+        /* Canvas de rendu Three.js */
+        canvas { 
+            display: block; 
+            width: 100%; 
+            height: 100%; 
+        }
+
+        /* Bouton micro (icône SVG) */
+        .mic-button {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            pointer-events: auto;
+            background: rgba(0, 0, 0, 0.6);
+            border: none;
+            color: white;
+            font-size: 1.6rem;
+            padding: 10px;
+            border-radius: 50%;
+            cursor: pointer;
+            z-index: 100;
+        }
+        .mic-button.listening { 
+            background: rgba(220, 40, 40, 0.8); 
+        }
+        /* Micro physiquement ancré au bas-centre de l'avatar (suit drag/resize). */
+        #mic-btn {
+            position: absolute;
+            bottom: -18px; /* Déborde légèrement sous le menton, comme sur la maquette */
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 50;
+            width: 48px;
+            height: 48px;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.35rem;
+            background: rgba(15, 23, 42, 0.88);
+            border: 2px solid rgba(255, 255, 255, 0.28);
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45), 0 0 0 4px rgba(255, 255, 255, 0.05);
+        }
+
+        /* OVERLAY APP: Panneau de configuration professionnel v2 */
+        .config-panel-v2 {
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          width: 440px;
+          max-height: 90vh;
+          background: rgba(15, 15, 25, 0.85);
+          backdrop-filter: blur(20px) saturate(180%);
+          -webkit-backdrop-filter: blur(20px) saturate(180%);
+          color: #fff;
+          border-radius: 16px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+          z-index: 10000;
+          display: none;
+          overflow: hidden;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        .panel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 16px 20px;
+          background: linear-gradient(135deg, rgba(74, 158, 255, 0.15), rgba(138, 43, 226, 0.1));
+          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .logo-icon {
+          font-size: 28px;
+          background: linear-gradient(135deg, #4a9eff, #8a2be2);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+        }
+        .panel-header h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.5px; }
+        .version-badge {
+          font-size: 10px; background: rgba(74, 158, 255, 0.2); color: #4a9eff;
+          padding: 2px 8px; border-radius: 10px; font-weight: 600;
+        }
+        .close-btn {
+          background: rgba(255, 255, 255, 0.05); border: none; color: #fff;
+          width: 32px; height: 32px; border-radius: 8px; cursor: pointer;
+          font-size: 16px; transition: all 0.2s;
+        }
+        .close-btn:hover { background: rgba(255, 80, 80, 0.2); color: #ff5050; }
+        .panel-tabs {
+          display: flex; gap: 4px; padding: 8px 16px;
+          background: rgba(0, 0, 0, 0.2); border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          overflow-x: auto;
+        }
+        .tab-btn {
+          background: transparent; border: none; color: rgba(255, 255, 255, 0.5);
+          padding: 8px 14px; cursor: pointer; font-size: 12px; font-weight: 500;
+          border-radius: 8px; transition: all 0.2s; white-space: nowrap;
+        }
+        .tab-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
+        .tab-btn.active {
+          color: #fff; background: linear-gradient(135deg, #4a9eff, #8a2be2);
+          box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
+        }
+        .panel-body { padding: 20px; overflow-y: auto; max-height: calc(90vh - 180px); }
+        .tab-content { display: none; animation: fadeIn 0.3s ease; }
+        .tab-content.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .tab-content h3 { margin: 0 0 8px 0; font-size: 16px; font-weight: 600; }
+        .tab-content h4 { margin: 16px 0 8px 0; font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, 0.9); }
+        .tab-description { font-size: 12px; color: rgba(255, 255, 255, 0.5); margin: 0 0 16px 0; line-height: 1.5; }
+        .provider-list { display: flex; flex-direction: column; gap: 12px; }
+        .provider-card {
+          background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 12px; padding: 14px; transition: all 0.2s;
+        }
+        .provider-card:hover { background: rgba(255, 255, 255, 0.05); border-color: rgba(74, 158, 255, 0.3); }
+        .provider-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .provider-name { font-weight: 600; font-size: 13px; }
+        .provider-badge {
+          font-size: 10px; padding: 2px 8px; border-radius: 10px;
+          background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.7); font-weight: 600;
+        }
+        .provider-badge.recommended { background: linear-gradient(135deg, #4a9eff, #8a2be2); color: #fff; }
+        .provider-badge.free { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .provider-info { font-size: 11px; color: rgba(255, 255, 255, 0.5); margin-bottom: 8px; }
+        .api-link { display: inline-block; font-size: 11px; color: #4a9eff; text-decoration: none; margin-bottom: 8px; transition: color 0.2s; }
+        .api-link:hover { color: #6ab0ff; text-decoration: underline; }
+        .provider-card input[type="password"], .provider-card input[type="text"], .provider-card select, .tab-content textarea {
+          width: 100%; padding: 8px 12px; background: rgba(0, 0, 0, 0.3);
+          border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: #fff;
+          font-size: 12px; margin-bottom: 8px; box-sizing: border-box; transition: border-color 0.2s;
+        }
+        .provider-card input:focus, .provider-card select:focus, .tab-content textarea:focus {
+          outline: none; border-color: #4a9eff; background: rgba(0, 0, 0, 0.4);
+        }
+        .provider-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+        .btn-test {
+          background: linear-gradient(135deg, #4a9eff, #6ab0ff); color: #fff; border: none;
+          padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 12px;
+          font-weight: 500; transition: all 0.2s;
+        }
+        .btn-test:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4); }
+        .btn-test:disabled { opacity: 0.5; cursor: not-allowed; }
+        .status-indicator { font-size: 11px; font-weight: 500; }
+        .status-indicator.success { color: #22c55e; }
+        .status-indicator.error { color: #ef4444; }
+        .status-indicator.loading { color: #f59e0b; }
+        .switch-label { display: flex; align-items: center; gap: 10px; font-size: 12px; cursor: pointer; margin: 12px 0; }
+        .switch-label input { display: none; }
+        .switch-slider { position: relative; width: 36px; height: 20px; background: rgba(255, 255, 255, 0.1); border-radius: 10px; transition: background 0.3s; }
+        .switch-slider::before { content: ''; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: transform 0.3s; }
+        .switch-label input:checked + .switch-slider { background: linear-gradient(135deg, #4a9eff, #8a2be2); }
+        .switch-label input:checked + .switch-slider::before { transform: translateX(16px); }
+        .slider-group { display: flex; flex-direction: column; gap: 12px; }
+        .slider-group label { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+        .slider-label { flex: 1; color: rgba(255, 255, 255, 0.8); }
+        .slider-group input[type="range"] { flex: 2; -webkit-appearance: none; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; outline: none; }
+        .slider-group input[type="range"]::-webkit-slider-thumb {
+          -webkit-appearance: none; width: 14px; height: 14px;
+          background: linear-gradient(135deg, #4a9eff, #8a2be2); border-radius: 50%;
+          cursor: pointer; box-shadow: 0 2px 6px rgba(74, 158, 255, 0.4);
+        }
+        .slider-value { min-width: 35px; text-align: right; font-size: 11px; color: #4a9eff; font-weight: 600; font-family: 'Courier New', monospace; }
+        .calibration-section, .manual-calibration { margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+        .btn-primary {
+          background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; border: none;
+          padding: 10px 20px; border-radius: 10px; cursor: pointer; font-size: 13px;
+          font-weight: 600; width: 100%; transition: all 0.2s;
+        }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(34, 197, 94, 0.4); }
+        .btn-secondary {
+          background: rgba(255, 255, 255, 0.08); color: #fff; border: 1px solid rgba(255, 255, 255, 0.15);
+          padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 12px;
+          font-weight: 500; transition: all 0.2s;
+        }
+        .btn-secondary:hover { background: rgba(255, 255, 255, 0.12); }
+        .btn-danger {
+          background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);
+          padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 12px;
+          font-weight: 500; transition: all 0.2s;
+        }
+        .btn-danger:hover { background: rgba(239, 68, 68, 0.25); }
+        .btn-preset {
+          background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);
+          color: #fff; padding: 6px 12px; border-radius: 8px; cursor: pointer;
+          font-size: 11px; margin-right: 6px; margin-bottom: 6px; transition: all 0.2s;
+        }
+        .btn-preset:hover { background: rgba(74, 158, 255, 0.15); border-color: #4a9eff; }
+        .directive-presets { margin-bottom: 12px; }
+        .tab-content textarea { font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5; resize: vertical; min-height: 200px; }
+        .char-count { font-size: 11px; color: rgba(255, 255, 255, 0.4); text-align: right; margin-top: 4px; }
+        .demo-mode-section {
+          padding: 14px; margin-bottom: 16px; border-radius: 12px;
+          background: rgba(74, 158, 255, 0.07); border: 1px solid rgba(74, 158, 255, 0.18);
+        }
+        .precache-status { margin-top: 10px; font-size: 12px; color: #6ab0ff; min-height: 18px; }
+        .memory-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+        .memory-preview {
+          background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 8px; padding: 12px; font-size: 11px; max-height: 200px;
+          overflow-y: auto; line-height: 1.6;
+        }
+        .memory-preview em { color: rgba(255, 255, 255, 0.4); }
+        .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 12px; cursor: pointer; }
+        .checkbox-label input { accent-color: #4a9eff; }
+        .panel-footer {
+          padding: 16px 20px; background: rgba(0, 0, 0, 0.3);
+          border-top: 1px solid rgba(255, 255, 255, 0.08);
+          display: flex; gap: 10px; align-items: center;
+        }
+        .panel-footer .btn-secondary { width: auto; }
+        .panel-footer .btn-primary { flex: 1; width: auto; }
+        .save-status { font-size: 11px; font-weight: 500; margin-left: 8px; }
+        .save-status.success { color: #22c55e; }
+        .save-status.error { color: #ef4444; }
+        .calibration-status { margin-top: 10px; font-size: 12px; min-height: 20px; }
+        .panel-body::-webkit-scrollbar, .memory-preview::-webkit-scrollbar { width: 6px; }
+        .panel-body::-webkit-scrollbar-track, .memory-preview::-webkit-scrollbar-track { background: transparent; }
+        .panel-body::-webkit-scrollbar-thumb, .memory-preview::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
+        .panel-body::-webkit-scrollbar-thumb:hover, .memory-preview::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+        /* OVERLAY APP: modal d'onboarding (premier démarrage) */
+        #onboarding-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 300;
+            pointer-events: auto;
+        }
+        #onboarding-modal .modal-content {
+            background: #222;
+            color: #fff;
+            padding: 24px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 400px;
+            pointer-events: auto;
+        }
+        #onboarding-modal input {
+            width: 100%;
+            margin: 8px 0;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+        #onboarding-modal button {
+            margin-top: 12px;
+            padding: 8px 16px;
+            cursor: pointer;
+        }
+        /* OVERLAY APP: panneau déplaçable + redimensionnable */
+        .panel-header-drag {
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 48px;
+            background: rgba(15, 15, 25, 0.88);
+            backdrop-filter: blur(12px);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            z-index: 1;
+            cursor: grab;
+            touch-action: none;
+        }
+        .panel-header-drag:active { cursor: grabbing; }
+        .panel-header-drag .header-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-left: auto; }
+        .panel-resize-handle {
+            position: absolute;
+            bottom: 0; right: 0;
+            width: 16px; height: 16px;
+            background: rgba(255,255,255,0.08);
+            cursor: se-resize;
+            touch-action: none;
+            z-index: 2;
+        }
+        .panel-resize-handle:hover { background: rgba(255,255,255,0.25); }
+    </style>
+  <script type="module" crossorigin src="/assets/index-n50T6H-P.js"></script>
+</head>
+<body>
+    <!-- OVERLAY APP: conteneur de l'avatar (drag/resize) -->
+    <div id="avatar-container">
+        <div id="scene"></div>
+
+        <!-- Bouton micro attaché au bas-centre exact du conteneur (suit l'avatar) -->
+        <button id="mic-btn" class="mic-button" title="Activer le microphone">🎤</button>
+    </div>
+
+    <!-- OVERLAY APP: modal d'onboarding (premier démarrage) -->
+    <div id="onboarding-modal">
+        <div class="modal-content">
+            <h2 style="margin-top:0">Premier démarrage</h2>
+            <input id="apiKey" type="text" placeholder="Clé API Gemini" />
+            <button id="btn-create-gemini-key" type="button" style="margin:8px 0;background:#1a73e8;color:#fff;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;width:100%;font-size:14px;">
+                🔑 Créer ma clé API Gemini (ouvre Google AI Studio)
+            </button>
+            <p style="font-size:12px;color:#aaa;margin:4px 0;">Une seule clé suffit. Elle reste stockée localement sur cet ordinateur.</p>
+            <input id="userName" type="text" placeholder="Votre nom" />
+            <input id="avatarName" type="text" placeholder="Nom de l'avatar" />
+            <button id="btn-save-onboard">Sauvegarder</button>
+        </div>
+    </div>
+
+    <!-- OVERLAY APP: Panneau de configuration professionnel v2 -->
+    <div id="config-panel" class="config-panel-v2">
+      <!-- Barre de titre draggable -->
+      <div class="panel-header-drag">
+        <div class="header-left">
+          <div class="logo-icon">🤖</div>
+          <div>
+            <h2>Sarra Studio</h2>
+            <span class="version-badge">v2.0 Pro</span>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button id="cfg-minimize" class="close-btn" title="Réduire fenêtre">—</button>
+          <button id="cfg-close" class="close-btn" title="Fermer">✕</button>
+        </div>
+      </div>
+
+      <!-- Handle de resize (coin inférieur droit) -->
+      <div class="panel-resize-handle"></div>
+
+      <nav class="panel-tabs">
+        <button class="tab-btn active" data-tab="ia">🧠 IA</button>
+        <button class="tab-btn" data-tab="voice">🎙️ Voix</button>
+        <button class="tab-btn" data-tab="lipsync">👄 Lipsync</button>
+        <button class="tab-btn" data-tab="emotions">😊 Émotions</button>
+        <button class="tab-btn" data-tab="directives">📜 Directives</button>
+        <button class="tab-btn" data-tab="memory">💾 Mémoire</button>
+      </nav>
+
+      <div class="panel-body">
+        <!-- ONGLET 1 : Moteurs IA -->
+        <div class="tab-content active" id="tab-ia">
+          <h3>Moteur de raisonnement</h3>
+          <p class="tab-description">Choisissez l'IA qui fait penser Sarra. Basculement automatique en cas d'échec.</p>
+
+          <div class="provider-list">
+            <div class="provider-card">
+              <div class="provider-header">
+                <span class="provider-name">⚙️ Modèle actif</span>
+                <span class="provider-badge free">Bascule auto</span>
+              </div>
+              <div class="provider-info">Modèle prioritaire pour le raisonnement. Les modèles Lite de secours prennent le relais en cas de 503 / 429 / 404.</div>
+              <select id="cfg-reasoning-model">
+                <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (recommandé)</option>
+                <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (secours)</option>
+                <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (ancien)</option>
+              </select>
+            </div>
+            <div class="provider-card active" data-provider="gemini">
+              <div class="provider-header">
+                <span class="provider-name">Google Gemini 2.5 Flash Lite</span>
+                <span class="provider-badge recommended">Recommandé</span>
+              </div>
+              <div class="provider-info">Rapide et stable (fallback Lite automatique), excellent en français</div>
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" class="api-link">🔑 Obtenir une clé gratuite</a>
+              <input type="password" id="cfg-gemini-key" placeholder="Collez votre clé API (AIza... / AQ...)" />
+              <div class="provider-actions">
+                <button class="btn-test" data-test="gemini">🧪 Tester</button>
+                <span class="status-indicator" id="status-gemini"></span>
+              </div>
+            </div>
+
+            <div class="provider-card" data-provider="groq">
+              <div class="provider-header">
+                <span class="provider-name">Groq (Llama 3.3 70B)</span>
+                <span class="provider-badge">Ultra-rapide</span>
+              </div>
+              <div class="provider-info">14 000 tokens/min gratuit, API OpenAI-compatible</div>
+              <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" class="api-link">🔑 Obtenir une clé gratuite</a>
+              <input type="password" id="cfg-groq-key" placeholder="gsk_..." />
+              <div class="provider-actions">
+                <button class="btn-test" data-test="groq">🧪 Tester</button>
+                <span class="status-indicator" id="status-groq"></span>
+              </div>
+            </div>
+
+            <div class="provider-card" data-provider="openrouter">
+              <div class="provider-header">
+                <span class="provider-name">OpenRouter (Multi-modèles)</span>
+                <span class="provider-badge">Gratuit</span>
+              </div>
+              <div class="provider-info">Accès à 100+ modèles, fallback automatique</div>
+              <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" class="api-link">🔑 Obtenir une clé gratuite</a>
+              <input type="password" id="cfg-openrouter-key" placeholder="sk-or-..." />
+              <div class="provider-actions">
+                <button class="btn-test" data-test="openrouter">🧪 Tester</button>
+                <span class="status-indicator" id="status-openrouter"></span>
+              </div>
+            </div>
+
+            <div class="provider-card" data-provider="vision">
+              <div class="provider-header">
+                <span class="provider-name">👁️ Vision écran</span>
+                <span class="provider-badge">Capture locale</span>
+              </div>
+              <div class="provider-info">Sarra voit votre écran pour répondre au contexte. Image envoyée à Gemini, jamais stockée.</div>
+              <label class="switch-label">
+                <input type="checkbox" id="cfg-screen-vision" checked />
+                <span class="switch-slider"></span>
+                <span>Activer la vision écran</span>
+              </label>
+              <div class="provider-actions">
+                <button class="btn-test" id="btn-test-vision">📸 Tester la capture</button>
+                <span class="status-indicator" id="status-vision"></span>
+              </div>
+              <img id="vision-preview" style="display:none; width:100%; border-radius:8px; margin-top:8px;" />
+            </div>
+          </div>
+
+          <div class="fallback-config">
+            <label class="switch-label">
+              <input type="checkbox" id="cfg-auto-fallback" checked />
+              <span class="switch-slider"></span>
+              <span>Basculement automatique si un modèle échoue</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- ONGLET 2 : Moteurs de voix -->
+        <div class="tab-content" id="tab-voice">
+          <h3>Moteur de synthèse vocale (TTS)</h3>
+          <p class="tab-description">Voix humaines réalistes pour Sarra.</p>
+
+          <div class="provider-list">
+            <div class="provider-card" data-provider="browser">
+              <div class="provider-header">
+                <span class="provider-name">Synthèse navigateur</span>
+                <span class="provider-badge free">100% gratuit</span>
+              </div>
+              <div class="provider-info">Voix système (Microsoft Julie, Google FR)</div>
+              <select id="cfg-browser-voice"></select>
+              <div class="provider-actions">
+                <button class="btn-test" data-test="browser-voice">🔊 Tester voix</button>
+              </div>
+            </div>
+
+            <div class="provider-card" data-provider="elevenlabs">
+              <div class="provider-header">
+                <span class="provider-name">ElevenLabs</span>
+                <span class="provider-badge">Freemium</span>
+              </div>
+              <div class="provider-info">10 000 caractères/mois gratuits, voix ultra-réalistes</div>
+              <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noreferrer" class="api-link">🔑 Clé gratuite</a>
+              <input type="password" id="cfg-elevenlabs-key" placeholder="xi-..." />
+              <select id="cfg-elevenlabs-voice">
+                <option value="Rachel">Rachel (Femme, douce)</option>
+                <option value="Domi">Domi (Femme, jeune)</option>
+                <option value="Bella">Bella (Femme, mature)</option>
+                <option value="Antoni">Antoni (Homme)</option>
+              </select>
+              <div class="provider-actions">
+                <button class="btn-test" data-test="elevenlabs">🔊 Tester voix</button>
+                <span class="status-indicator" id="status-elevenlabs"></span>
+              </div>
+            </div>
+
+            <div class="provider-card active" data-provider="gemini-tts">
+              <div class="provider-header">
+                <span class="provider-name">Gemini TTS (Kore, Aoede)</span>
+                <span class="provider-badge">Nouveau</span>
+              </div>
+              <div class="provider-info">Voix IA natives de Google, qualité studio</div>
+              <input type="password" id="cfg-gemini-tts-key" placeholder="Clé Gemini (reuse)" />
+              <select id="cfg-gemini-tts-voice">
+                <option value="Kore" selected>Kore (Femme, naturelle)</option>
+                <option value="Aoede">Aoede (Femme, chaude)</option>
+                <option value="Puck">Puck (Homme)</option>
+                <option value="Charon">Charon (Homme, grave)</option>
+              </select>
+              <div class="provider-actions">
+                <button class="btn-test" data-test="gemini-tts">🔊 Tester voix</button>
+                <span class="status-indicator" id="status-gemini-tts"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ONGLET 3 : Lipsync -->
+        <div class="tab-content" id="tab-lipsync">
+          <h3>Calibration du Lipsync</h3>
+          <p class="tab-description">Ajustez la synchronisation labiale pour un rendu naturel.</p>
+
+          <div class="slider-group">
+            <label>
+              <span class="slider-label">Sensibilité globale</span>
+              <input type="range" id="cfg-lip-sensitivity" min="0.3" max="2" step="0.1" value="1" />
+              <span class="slider-value" id="val-lip-sensitivity">1.0</span>
+            </label>
+            <label>
+              <span class="slider-label">Vitesse d'ouverture</span>
+              <input type="range" id="cfg-lip-speed" min="0.5" max="2" step="0.1" value="1" />
+              <span class="slider-value" id="val-lip-speed">1.0</span>
+            </label>
+            <label>
+              <span class="slider-label">Amplitude mâchoire (jawOpen)</span>
+              <input type="range" id="cfg-lip-jaw" min="0.3" max="1.5" step="0.1" value="1" />
+              <span class="slider-value" id="val-lip-jaw">1.0</span>
+            </label>
+            <label>
+              <span class="slider-label">Lissage temporel</span>
+              <input type="range" id="cfg-lip-smoothing" min="0" max="0.3" step="0.05" value="0.1" />
+              <span class="slider-value" id="val-lip-smoothing">0.10</span>
+            </label>
+            <label>
+              <span class="slider-label">Seuil d'activation (bruit de fond)</span>
+              <input type="range" id="cfg-lip-threshold" min="0" max="0.3" step="0.02" value="0.05" />
+              <span class="slider-value" id="val-lip-threshold">0.05</span>
+            </label>
+          </div>
+
+          <div class="calibration-section">
+            <h4>Calibration automatique</h4>
+            <p class="tab-description">Sarra prononce une phrase de test et ajuste automatiquement les paramètres.</p>
+            <button class="btn-primary btn-calibrate" id="btn-auto-calibrate">🎯 Lancer la calibration auto</button>
+            <div class="calibration-status" id="calibration-status"></div>
+          </div>
+
+          <div class="manual-calibration">
+            <h4>Calibration manuelle</h4>
+            <button class="btn-secondary" id="btn-test-lipsync">🗣️ Prononcer "Bonjour, je suis Sarra"</button>
+          </div>
+
+          <label class="checkbox-label">
+            <input type="checkbox" id="cfg-lip-teeth" checked />
+            <span>Animer les dents (AvatarTeethLower)</span>
+          </label>
+        </div>
+
+        <!-- ONGLET 4 : Émotions -->
+        <div class="tab-content" id="tab-emotions">
+          <h3>Expressions et émotions</h3>
+          <p class="tab-description">Personnalisez le langage corporel de Sarra.</p>
+
+          <div class="slider-group">
+            <label>
+              <span class="slider-label">Fréquence de clignement</span>
+              <input type="range" id="cfg-emo-blink-rate" min="1" max="10" step="1" value="4" />
+              <span class="slider-value" id="val-emo-blink-rate">4s</span>
+            </label>
+            <label>
+              <span class="slider-label">Intensité du clignement</span>
+              <input type="range" id="cfg-emo-blink" min="0" max="1" step="0.1" value="0.8" />
+              <span class="slider-value" id="val-emo-blink">0.8</span>
+            </label>
+            <label>
+              <span class="slider-label">Inclinaison tête (réflexion)</span>
+              <input type="range" id="cfg-emo-neck" min="0" max="0.2" step="0.01" value="0.08" />
+              <span class="slider-value" id="val-emo-neck">0.08</span>
+            </label>
+            <label>
+              <span class="slider-label">Amplitude respiration idle</span>
+              <input type="range" id="cfg-emo-breath" min="0" max="0.05" step="0.005" value="0.015" />
+              <span class="slider-value" id="val-emo-breath">0.015</span>
+            </label>
+            <label>
+              <span class="slider-label">Micro-saccades du regard</span>
+              <input type="range" id="cfg-emo-gaze" min="0" max="0.1" step="0.01" value="0.03" />
+              <span class="slider-value" id="val-emo-gaze">0.03</span>
+            </label>
+            <label>
+              <span class="slider-label">Sourcils (réflexion)</span>
+              <input type="range" id="cfg-emo-brow" min="0" max="0.5" step="0.05" value="0.1" />
+              <span class="slider-value" id="val-emo-brow">0.10</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- ONGLET 5 : Directives Core -->
+        <div class="tab-content" id="tab-directives">
+          <h3>Directives fondamentales de l'avatar</h3>
+          <p class="tab-description">Ces instructions définissent la personnalité et le comportement de Sarra. Elles sont envoyées à chaque requête IA.</p>
+
+          <div class="directive-presets">
+            <button class="btn-preset" data-preset="friendly">😊 Amicale</button>
+            <button class="btn-preset" data-preset="professional">💼 Professionnelle</button>
+            <button class="btn-preset" data-preset="pedagogical">🎓 Pédagogique</button>
+            <button class="btn-preset" data-preset="humorous">😄 Humoristique</button>
+          </div>
+
+          <textarea id="cfg-core-directives" rows="12" maxlength="2000" placeholder="Ex: Tu es Sarra, une assistante IA bienveillante. Tu parles en français, avec un ton naturel et chaleureux..."></textarea>
+          <div class="char-count"><span id="directive-count">0</span> / 2000 caractères</div>
+        </div>
+
+        <!-- ONGLET 6 : Mémoire -->
+        <div class="tab-content" id="tab-memory">
+          <h3>Mémoire persistante</h3>
+          <p class="tab-description">Sarra se souvient de vos échanges pour améliorer ses réponses.</p>
+
+          <label>
+            <span class="slider-label">Taille de la mémoire (derniers échanges)</span>
+            <input type="number" id="cfg-memory-size" min="0" max="50" value="10" />
+          </label>
+
+          <div class="demo-mode-section">
+            <label class="switch-label">
+              <input type="checkbox" id="cfg-demo-mode" />
+              <span class="switch-slider"></span>
+              <span>🎭 Mode Démonstration (cache activé)</span>
+            </label>
+            <p class="tab-description">Quand activé, Sarra rejoue les réponses déjà données sans appeler l'API. Zéro risque de quota.</p>
+            <button class="btn-primary" id="btn-precache-demo">📦 Pré-générer les réponses de démo</button>
+            <div class="precache-status" id="precache-status"></div>
+          </div>
+
+          <div class="memory-actions">
+            <button class="btn-secondary" id="btn-view-memory">👁️ Voir la mémoire</button>
+            <button class="btn-danger" id="btn-clear-memory">🗑️ Vider la mémoire</button>
+            <button class="btn-danger" id="btn-reset-all">⚠️ Réglages usine</button>
+          </div>
+
+          <div class="memory-preview" id="memory-preview">
+            <em>La mémoire est vide.</em>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-footer">
+        <button class="btn-secondary" id="btn-factory-reset">↺ Réglages usine</button>
+        <button class="btn-primary" id="cfg-save">💾 Sauvegarder comme configuration par défaut</button>
+        <span class="save-status" id="save-status"></span>
+      </div>
+    </div>
+
+</body>
+</html>
