@@ -18,12 +18,12 @@
             overflow: hidden;
         }
 
-        body { 
-            font-family: sans-serif; 
+        body {
+            font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
         }
 
         /* Ces éléments captent les clics malgré le fond transparent. */
-        #avatar-container, #config-panel, #mic-btn {
+        #avatar-container, #config-panel, #mic-btn, #cfg-open-btn {
             pointer-events: auto;
         }
 
@@ -43,10 +43,10 @@
         #scene { width: 100%; height: 100%; }
 
         /* Canvas de rendu Three.js */
-        canvas { 
-            display: block; 
-            width: 100%; 
-            height: 100%; 
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
         }
 
         /* Bouton micro (icône SVG) */
@@ -65,13 +65,13 @@
             cursor: pointer;
             z-index: 100;
         }
-        .mic-button.listening { 
-            background: rgba(220, 40, 40, 0.8); 
+        .mic-button.listening {
+            background: rgba(220, 40, 40, 0.8);
         }
         /* Micro physiquement ancré au bas-centre de l'avatar (suit drag/resize). */
         #mic-btn {
             position: absolute;
-            bottom: -18px; /* Déborde légèrement sous le menton, comme sur la maquette */
+            bottom: -18px;
             left: 50%;
             transform: translateX(-50%);
             z-index: 50;
@@ -82,593 +82,1137 @@
             align-items: center;
             justify-content: center;
             font-size: 1.35rem;
-            background: rgba(15, 23, 42, 0.88);
-            border: 2px solid rgba(255, 255, 255, 0.28);
-            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45), 0 0 0 4px rgba(255, 255, 255, 0.05);
+            background: rgba(15, 18, 24, 0.9);
+            border: 2px solid rgba(127, 147, 255, 0.45);
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45), 0 0 0 4px rgba(127, 147, 255, 0.08);
         }
-
-        /* OVERLAY APP: Panneau de configuration professionnel v2 */
-        .config-panel-v2 {
-          position: fixed;
-          top: 20px;
-          right: 20px;
-          width: 440px;
-          max-height: 90vh;
-          background: rgba(15, 15, 25, 0.85);
-          backdrop-filter: blur(20px) saturate(180%);
-          -webkit-backdrop-filter: blur(20px) saturate(180%);
-          color: #fff;
-          border-radius: 16px;
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
-          z-index: 10000;
-          display: none;
-          overflow: hidden;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-        .panel-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 16px 20px;
-          background: linear-gradient(135deg, rgba(74, 158, 255, 0.15), rgba(138, 43, 226, 0.1));
-          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        }
-        .header-left { display: flex; align-items: center; gap: 12px; }
-        .logo-icon {
-          font-size: 28px;
-          background: linear-gradient(135deg, #4a9eff, #8a2be2);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-        }
-        .panel-header h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.5px; }
-        .version-badge {
-          font-size: 10px; background: rgba(74, 158, 255, 0.2); color: #4a9eff;
-          padding: 2px 8px; border-radius: 10px; font-weight: 600;
-        }
-        .close-btn {
-          background: rgba(255, 255, 255, 0.05); border: none; color: #fff;
-          width: 32px; height: 32px; border-radius: 8px; cursor: pointer;
-          font-size: 16px; transition: all 0.2s;
-        }
-        .close-btn:hover { background: rgba(255, 80, 80, 0.2); color: #ff5050; }
-        .panel-tabs {
-          display: flex; gap: 4px; padding: 8px 16px;
-          background: rgba(0, 0, 0, 0.2); border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-          overflow-x: auto;
-        }
-        .tab-btn {
-          background: transparent; border: none; color: rgba(255, 255, 255, 0.5);
-          padding: 8px 14px; cursor: pointer; font-size: 12px; font-weight: 500;
-          border-radius: 8px; transition: all 0.2s; white-space: nowrap;
-        }
-        .tab-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
-        .tab-btn.active {
-          color: #fff; background: linear-gradient(135deg, #4a9eff, #8a2be2);
-          box-shadow: 0 2px 8px rgba(74, 158, 255, 0.3);
-        }
-        .panel-body { padding: 20px; overflow-y: auto; max-height: calc(90vh - 180px); }
-        .tab-content { display: none; animation: fadeIn 0.3s ease; }
-        .tab-content.active { display: block; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .tab-content h3 { margin: 0 0 8px 0; font-size: 16px; font-weight: 600; }
-        .tab-content h4 { margin: 16px 0 8px 0; font-size: 14px; font-weight: 600; color: rgba(255, 255, 255, 0.9); }
-        .tab-description { font-size: 12px; color: rgba(255, 255, 255, 0.5); margin: 0 0 16px 0; line-height: 1.5; }
-        .provider-list { display: flex; flex-direction: column; gap: 12px; }
-        .provider-card {
-          background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 12px; padding: 14px; transition: all 0.2s;
-        }
-        .provider-card:hover { background: rgba(255, 255, 255, 0.05); border-color: rgba(74, 158, 255, 0.3); }
-        .provider-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-        .provider-name { font-weight: 600; font-size: 13px; }
-        .provider-badge {
-          font-size: 10px; padding: 2px 8px; border-radius: 10px;
-          background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.7); font-weight: 600;
-        }
-        .provider-badge.recommended { background: linear-gradient(135deg, #4a9eff, #8a2be2); color: #fff; }
-        .provider-badge.free { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
-        .provider-info { font-size: 11px; color: rgba(255, 255, 255, 0.5); margin-bottom: 8px; }
-        .api-link { display: inline-block; font-size: 11px; color: #4a9eff; text-decoration: none; margin-bottom: 8px; transition: color 0.2s; }
-        .api-link:hover { color: #6ab0ff; text-decoration: underline; }
-        .provider-card input[type="password"], .provider-card input[type="text"], .provider-card select, .tab-content textarea {
-          width: 100%; padding: 8px 12px; background: rgba(0, 0, 0, 0.3);
-          border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: #fff;
-          font-size: 12px; margin-bottom: 8px; box-sizing: border-box; transition: border-color 0.2s;
-        }
-        .provider-card input:focus, .provider-card select:focus, .tab-content textarea:focus {
-          outline: none; border-color: #4a9eff; background: rgba(0, 0, 0, 0.4);
-        }
-        .provider-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-        .btn-test {
-          background: linear-gradient(135deg, #4a9eff, #6ab0ff); color: #fff; border: none;
-          padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 12px;
-          font-weight: 500; transition: all 0.2s;
-        }
-        .btn-test:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4); }
-        .btn-test:disabled { opacity: 0.5; cursor: not-allowed; }
-        .status-indicator { font-size: 11px; font-weight: 500; }
-        .status-indicator.success { color: #22c55e; }
-        .status-indicator.error { color: #ef4444; }
-        .status-indicator.loading { color: #f59e0b; }
-        .switch-label { display: flex; align-items: center; gap: 10px; font-size: 12px; cursor: pointer; margin: 12px 0; }
-        .switch-label input { display: none; }
-        .switch-slider { position: relative; width: 36px; height: 20px; background: rgba(255, 255, 255, 0.1); border-radius: 10px; transition: background 0.3s; }
-        .switch-slider::before { content: ''; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: transform 0.3s; }
-        .switch-label input:checked + .switch-slider { background: linear-gradient(135deg, #4a9eff, #8a2be2); }
-        .switch-label input:checked + .switch-slider::before { transform: translateX(16px); }
-        .slider-group { display: flex; flex-direction: column; gap: 12px; }
-        .slider-group label { display: flex; align-items: center; gap: 10px; font-size: 12px; }
-        .slider-label { flex: 1; color: rgba(255, 255, 255, 0.8); }
-        .slider-group input[type="range"] { flex: 2; -webkit-appearance: none; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; outline: none; }
-        .slider-group input[type="range"]::-webkit-slider-thumb {
-          -webkit-appearance: none; width: 14px; height: 14px;
-          background: linear-gradient(135deg, #4a9eff, #8a2be2); border-radius: 50%;
-          cursor: pointer; box-shadow: 0 2px 6px rgba(74, 158, 255, 0.4);
-        }
-        .slider-value { min-width: 35px; text-align: right; font-size: 11px; color: #4a9eff; font-weight: 600; font-family: 'Courier New', monospace; }
-        .calibration-section, .manual-calibration { margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
-        .btn-primary {
-          background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; border: none;
-          padding: 10px 20px; border-radius: 10px; cursor: pointer; font-size: 13px;
-          font-weight: 600; width: 100%; transition: all 0.2s;
-        }
-        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(34, 197, 94, 0.4); }
-        .btn-secondary {
-          background: rgba(255, 255, 255, 0.08); color: #fff; border: 1px solid rgba(255, 255, 255, 0.15);
-          padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 12px;
-          font-weight: 500; transition: all 0.2s;
-        }
-        .btn-secondary:hover { background: rgba(255, 255, 255, 0.12); }
-        .btn-danger {
-          background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);
-          padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 12px;
-          font-weight: 500; transition: all 0.2s;
-        }
-        .btn-danger:hover { background: rgba(239, 68, 68, 0.25); }
-        .btn-preset {
-          background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1);
-          color: #fff; padding: 6px 12px; border-radius: 8px; cursor: pointer;
-          font-size: 11px; margin-right: 6px; margin-bottom: 6px; transition: all 0.2s;
-        }
-        .btn-preset:hover { background: rgba(74, 158, 255, 0.15); border-color: #4a9eff; }
-        .directive-presets { margin-bottom: 12px; }
-        .tab-content textarea { font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5; resize: vertical; min-height: 200px; }
-        .char-count { font-size: 11px; color: rgba(255, 255, 255, 0.4); text-align: right; margin-top: 4px; }
-        .demo-mode-section {
-          padding: 14px; margin-bottom: 16px; border-radius: 12px;
-          background: rgba(74, 158, 255, 0.07); border: 1px solid rgba(74, 158, 255, 0.18);
-        }
-        .precache-status { margin-top: 10px; font-size: 12px; color: #6ab0ff; min-height: 18px; }
-        .memory-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
-        .memory-preview {
-          background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 8px; padding: 12px; font-size: 11px; max-height: 200px;
-          overflow-y: auto; line-height: 1.6;
-        }
-        .memory-preview em { color: rgba(255, 255, 255, 0.4); }
-        .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-top: 12px; cursor: pointer; }
-        .checkbox-label input { accent-color: #4a9eff; }
-        .panel-footer {
-          padding: 16px 20px; background: rgba(0, 0, 0, 0.3);
-          border-top: 1px solid rgba(255, 255, 255, 0.08);
-          display: flex; gap: 10px; align-items: center;
-        }
-        .panel-footer .btn-secondary { width: auto; }
-        .panel-footer .btn-primary { flex: 1; width: auto; }
-        .save-status { font-size: 11px; font-weight: 500; margin-left: 8px; }
-        .save-status.success { color: #22c55e; }
-        .save-status.error { color: #ef4444; }
-        .calibration-status { margin-top: 10px; font-size: 12px; min-height: 20px; }
-        .panel-body::-webkit-scrollbar, .memory-preview::-webkit-scrollbar { width: 6px; }
-        .panel-body::-webkit-scrollbar-track, .memory-preview::-webkit-scrollbar-track { background: transparent; }
-        .panel-body::-webkit-scrollbar-thumb, .memory-preview::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
-        .panel-body::-webkit-scrollbar-thumb:hover, .memory-preview::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
-        /* OVERLAY APP: modal d'onboarding (premier démarrage) */
-        #onboarding-modal {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.55);
-            display: none;
+        /* Bouton discret d'ouverture du panneau (utile si Ctrl+Shift+K est capturé par le navigateur) */
+        .cfg-fab-btn {
+            position: absolute;
+            bottom: -12px;
+            left: calc(50% + 42px);
+            transform: translateX(-50%);
+            z-index: 50;
+            width: 34px;
+            height: 34px;
+            padding: 0;
+            border-radius: 50%;
+            display: flex;
             align-items: center;
             justify-content: center;
-            z-index: 300;
+            font-size: 0.95rem;
+            background: rgba(15, 18, 24, 0.85);
+            color: #e6ebf3;
+            border: 1.5px solid rgba(127, 147, 255, 0.4);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.42);
+            cursor: pointer;
             pointer-events: auto;
+            opacity: 0.65;
+            transition: opacity 0.2s, transform 0.2s, border-color 0.2s, color 0.2s;
         }
-        #onboarding-modal .modal-content {
-            background: #222;
-            color: #fff;
-            padding: 24px;
-            border-radius: 10px;
-            width: 90%;
-            max-width: 400px;
+        .cfg-fab-btn:hover {
+            opacity: 1;
+            color: #7f93ff;
+            border-color: #7f93ff;
+            transform: translateX(-50%) scale(1.08);
+        }
+
+        /* =====================================================================
+           SARRA · CONFIGURATION — Fenêtre flottante déplaçable & redimensionnable
+           Style fidèle à configuration.html (Ardoise sombre & Indigo #7f93ff)
+           ===================================================================== */
+        .config-panel-v2 {
+            color-scheme: dark;
+            --bg: #0f1218;
+            --pn: #151a23;
+            --pn2: #1b212c;
+            --tx: #e6ebf3;
+            --mu: #94a0b4;
+            --ln: #28303d;
+            --ac: #7f93ff;
+            --ac2: #232c48;
+            --ok: #3ecf8e;
+            --warn: #ffb454;
+            --err: #ff7373;
+
+            position: fixed;
+            top: 24px;
+            right: 24px;
+            width: min(640px, calc(100vw - 32px));
+            height: min(760px, calc(100vh - 32px));
+            min-width: 380px;
+            min-height: 360px;
+            max-width: calc(100vw - 16px);
+            max-height: calc(100vh - 16px);
+
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            z-index: 10000;
             pointer-events: auto;
+
+            background: var(--bg);
+            color: var(--tx);
+            border: 1px solid var(--ln);
+            border-radius: 14px;
+            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+            font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+            container-type: inline-size;
+            container-name: sarra-cfg;
         }
-        #onboarding-modal input {
-            width: 100%;
-            margin: 8px 0;
-            padding: 8px;
+        .config-panel-v2.is-open { display: flex; }
+        .config-panel-v2.is-dragging,
+        .config-panel-v2.is-resizing {
+            user-select: none;
+            border-color: var(--ac);
+            box-shadow: 0 28px 80px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(127, 147, 255, 0.35);
+        }
+        .config-panel-v2.is-collapsed {
+            height: auto !important;
+            min-height: 0 !important;
+        }
+        .config-panel-v2.is-collapsed .panel-body,
+        .config-panel-v2.is-collapsed .panel-footer,
+        .config-panel-v2.is-collapsed .panel-resize-handle,
+        .config-panel-v2.is-collapsed .panel-resize-edge {
+            display: none !important;
+        }
+
+        .config-panel-v2 *,
+        .config-panel-v2 *::before,
+        .config-panel-v2 *::after {
             box-sizing: border-box;
         }
-        #onboarding-modal button {
-            margin-top: 12px;
-            padding: 8px 16px;
-            cursor: pointer;
+
+        /* Barre de titre déplaçable à la souris */
+        .config-panel-v2 header.panel-header-drag {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 16px;
+            background: var(--pn);
+            border-bottom: 1px solid var(--ln);
+            cursor: move;
+            user-select: none;
+            touch-action: none;
         }
-        /* OVERLAY APP: panneau déplaçable + redimensionnable */
-        .panel-header-drag {
-            position: absolute;
-            top: 0; left: 0; right: 0; height: 48px;
-            background: rgba(15, 15, 25, 0.88);
-            backdrop-filter: blur(12px);
+        .config-panel-v2.is-collapsed header.panel-header-drag {
+            border-bottom: none;
+        }
+        .config-panel-v2 header .grip {
+            width: 18px;
+            height: 26px;
+            display: grid;
+            place-items: center;
+            color: var(--mu);
+            cursor: move;
+            user-select: none;
+            letter-spacing: -2px;
+            font-size: 15px;
+            flex-shrink: 0;
+        }
+        .config-panel-v2 header h1 {
+            font-size: 15px;
+            margin: 0;
+            font-weight: 600;
+            letter-spacing: .01em;
+            color: var(--tx);
+            white-space: nowrap;
+        }
+        .config-panel-v2 header .badge {
+            font-size: 10px;
+            color: var(--mu);
+            border: 1px solid var(--ln);
+            border-radius: 999px;
+            padding: 2px 8px;
+            white-space: nowrap;
+        }
+        .config-panel-v2 header .badge.dirty {
+            color: var(--warn);
+            border-color: rgba(255, 180, 84, 0.45);
+        }
+        .config-panel-v2 header .badge.saved {
+            color: var(--ok);
+            border-color: rgba(62, 207, 142, 0.4);
+        }
+        .config-panel-v2 header .spacer { flex: 1; min-width: 8px; }
+        .config-panel-v2 header .hint {
+            font-size: 11px;
+            color: var(--mu);
+            white-space: nowrap;
+        }
+        .config-panel-v2 header .size-pill {
+            font-size: 10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            color: var(--mu);
+            background: var(--pn2);
+            border: 1px solid var(--ln);
+            border-radius: 999px;
+            padding: 2px 8px;
+            white-space: nowrap;
+        }
+        .config-panel-v2 header button.icon-btn {
+            padding: 5px 8px;
+            min-width: 28px;
+            line-height: 1;
+        }
+        @container sarra-cfg (max-width: 600px) {
+            .config-panel-v2 header .hint { display: none; }
+        }
+        @container sarra-cfg (max-width: 460px) {
+            .config-panel-v2 header .size-pill,
+            .config-panel-v2 header .badge { display: none; }
+        }
+
+        /* Corps principal scrollable */
+        .config-panel-v2 main.panel-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding: 14px 16px 24px;
+            scrollbar-width: thin;
+            scrollbar-color: var(--ln) transparent;
+        }
+        .config-panel-v2 main.panel-body::-webkit-scrollbar { width: 7px; }
+        .config-panel-v2 main.panel-body::-webkit-scrollbar-thumb {
+            background: var(--ln);
+            border-radius: 999px;
+        }
+
+        .config-panel-v2 section {
+            background: var(--pn);
+            border: 1px solid var(--ln);
+            border-radius: 12px;
+            margin: 0 0 12px;
+            overflow: hidden;
+        }
+        .config-panel-v2 section:last-child { margin-bottom: 0; }
+        .config-panel-v2 section > h2 {
+            margin: 0;
+            padding: 11px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+            color: var(--mu);
+            border-bottom: 1px solid var(--ln);
+        }
+        .config-panel-v2 .body {
+            padding: 12px 14px;
+            display: grid;
+            gap: 10px;
+        }
+
+        /* Champs, grilles et boutons identiques à configuration.html */
+        .config-panel-v2 label.field {
+            display: grid;
+            gap: 4px;
+            font-size: 12px;
+            color: var(--mu);
+        }
+        .config-panel-v2 .field-head {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 20px;
-            z-index: 1;
-            cursor: grab;
+            gap: 8px;
+        }
+        .config-panel-v2 output {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 11px;
+            color: var(--tx);
+            font-weight: 600;
+        }
+        .config-panel-v2 input[type="text"],
+        .config-panel-v2 input[type="password"],
+        .config-panel-v2 input[type="number"],
+        .config-panel-v2 select,
+        .config-panel-v2 textarea {
+            width: 100%;
+            background: var(--bg);
+            color: var(--tx);
+            border: 1px solid var(--ln);
+            border-radius: 8px;
+            padding: 8px 10px;
+            font: inherit;
+        }
+        .config-panel-v2 input[type="range"] {
+            width: 100%;
+            accent-color: var(--ac);
+            cursor: pointer;
+            margin: 2px 0;
+        }
+        .config-panel-v2 textarea {
+            min-height: 96px;
+            resize: vertical;
+        }
+        .config-panel-v2 input:focus-visible,
+        .config-panel-v2 select:focus-visible,
+        .config-panel-v2 textarea:focus-visible,
+        .config-panel-v2 button:focus-visible,
+        .config-panel-v2 a:focus-visible {
+            outline: 2px solid var(--ac);
+            outline-offset: 1px;
+        }
+
+        .config-panel-v2 .input-secret {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .config-panel-v2 .input-secret input { flex: 1; min-width: 0; }
+        .config-panel-v2 .btn-eye {
+            padding: 7px 9px;
+            flex-shrink: 0;
+            background: var(--pn2);
+        }
+
+        .config-panel-v2 .row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .config-panel-v2 .row > * {
+            flex: 1 1 200px;
+            min-width: 0;
+        }
+        .config-panel-v2 .inline {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .config-panel-v2 button,
+        .config-panel-v2 .btn-link-ghost {
+            background: var(--ac2);
+            color: var(--tx);
+            border: 1px solid var(--ln);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font: inherit;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            transition: border-color 0.15s, background-color 0.15s;
+        }
+        .config-panel-v2 button:hover,
+        .config-panel-v2 .btn-link-ghost:hover { border-color: var(--ac); }
+        .config-panel-v2 button.primary {
+            background: var(--ac);
+            border-color: var(--ac);
+            color: #0b0f16;
+            font-weight: 600;
+        }
+        .config-panel-v2 button.primary:hover { filter: brightness(1.06); }
+        .config-panel-v2 button.ghost,
+        .config-panel-v2 .btn-link-ghost {
+            background: transparent;
+            color: var(--tx);
+        }
+        .config-panel-v2 button.danger {
+            border-color: #5b2b2b;
+            color: var(--err);
+            background: transparent;
+        }
+        .config-panel-v2 button.danger:hover {
+            border-color: var(--err);
+            background: rgba(255, 115, 115, 0.08);
+        }
+        .config-panel-v2 button.confirming {
+            background: var(--err) !important;
+            border-color: var(--err) !important;
+            color: #0b0f16 !important;
+            font-weight: 600;
+        }
+        .config-panel-v2 button:disabled {
+            opacity: .55;
+            cursor: default;
+        }
+
+        /* Cartes toggle */
+        .config-panel-v2 .toggle {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            background: var(--pn2);
+            border: 1px solid var(--ln);
+            border-radius: 9px;
+            cursor: pointer;
+        }
+        .config-panel-v2 .toggle input {
+            width: auto;
+            accent-color: var(--ac);
+            flex-shrink: 0;
+        }
+        .config-panel-v2 .toggle span {
+            font-size: 12px;
+            color: var(--tx);
+        }
+        .config-panel-v2 .toggle small {
+            display: block;
+            color: var(--mu);
+            font-size: 11px;
+            font-weight: 400;
+        }
+
+        .config-panel-v2 .note {
+            font-size: 11px;
+            color: var(--mu);
+            margin: 0;
+            line-height: 1.45;
+        }
+        .config-panel-v2 .status,
+        .config-panel-v2 .status-indicator {
+            font-size: 11px;
+            color: var(--mu);
+            min-height: 16px;
+        }
+        .config-panel-v2 .status.ok,
+        .config-panel-v2 .status-indicator.success { color: var(--ok); }
+        .config-panel-v2 .status.err,
+        .config-panel-v2 .status-indicator.error { color: var(--err); }
+        .config-panel-v2 .status.warn,
+        .config-panel-v2 .status-indicator.loading { color: var(--warn); }
+
+        .config-panel-v2 .key-badge {
+            font-size: 10px;
+            border-radius: 999px;
+            padding: 2px 8px;
+            border: 1px solid var(--ln);
+            color: var(--mu);
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        .config-panel-v2 .key-badge.on {
+            color: var(--ok);
+            border-color: #245c43;
+        }
+
+        /* Clés alternatives repliables pour garder la vue principale épurée */
+        .config-panel-v2 details.alt-keys {
+            background: var(--pn2);
+            border: 1px solid var(--ln);
+            border-radius: 10px;
+            padding: 8px 10px;
+        }
+        .config-panel-v2 details.alt-keys summary {
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--tx);
+            font-weight: 500;
+            list-style: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .config-panel-v2 details.alt-keys summary::-webkit-details-marker { display: none; }
+        .config-panel-v2 details.alt-keys summary::after {
+            content: '▾';
+            color: var(--mu);
+            transition: transform 0.15s;
+        }
+        .config-panel-v2 details.alt-keys[open] summary::after {
+            transform: rotate(180deg);
+        }
+        .config-panel-v2 details.alt-keys .alt-body {
+            display: grid;
+            gap: 10px;
+            padding-top: 10px;
+            margin-top: 8px;
+            border-top: 1px solid var(--ln);
+        }
+
+        /* Liste mémoire */
+        .config-panel-v2 .memory-list {
+            display: grid;
+            gap: 6px;
+            max-height: 220px;
+            overflow: auto;
+            padding: 0;
+            margin: 0;
+            list-style: none;
+        }
+        .config-panel-v2 .memory-list li {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            background: var(--pn2);
+            border: 1px solid var(--ln);
+            border-radius: 8px;
+            padding: 7px 9px;
+        }
+        .config-panel-v2 .memory-list .kind {
+            font-size: 10px;
+            color: var(--ac);
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            white-space: nowrap;
+            padding-top: 2px;
+            min-width: 58px;
+        }
+        .config-panel-v2 .memory-list .text {
+            flex: 1;
+            font-size: 12px;
+            overflow-wrap: anywhere;
+        }
+        .config-panel-v2 .memory-list button {
+            padding: 2px 7px;
+            font-size: 11px;
+        }
+        .config-panel-v2 .stats {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .config-panel-v2 .stats span {
+            background: var(--pn2);
+            border: 1px solid var(--ln);
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 11px;
+            color: var(--mu);
+        }
+        .config-panel-v2 .stats b {
+            color: var(--tx);
+            font-weight: 600;
+        }
+
+        /* Chips & grilles */
+        .config-panel-v2 .chip-row {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .config-panel-v2 .chip-btn {
+            padding: 5px 10px;
+            font-size: 11px;
+            border-radius: 999px;
+            background: var(--pn2);
+        }
+        .config-panel-v2 .chip-btn.active {
+            background: var(--ac);
+            border-color: var(--ac);
+            color: #0b0f16;
+            font-weight: 600;
+        }
+        .config-panel-v2 .scale-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 10px;
+        }
+
+        .config-panel-v2 kbd,
+        #onboarding-modal kbd {
+            font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            background: var(--pn2, #1b212c);
+            border: 1px solid var(--ln, #28303d);
+            border-bottom-width: 2px;
+            border-radius: 5px;
+            padding: 1px 5px;
+            color: var(--tx, #e6ebf3);
+        }
+
+        /* Pied de fenêtre sticky */
+        .config-panel-v2 footer.panel-footer {
+            flex-shrink: 0;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding: 11px 16px;
+            background: var(--bg);
+            border-top: 1px solid var(--ln);
+        }
+        .config-panel-v2 footer .spacer { flex: 1; }
+        .config-panel-v2 footer .save-state {
+            font-size: 11px;
+            color: var(--mu);
+            min-width: 160px;
+        }
+        .config-panel-v2 footer .save-state.success { color: var(--ok); }
+        .config-panel-v2 footer .save-state.error { color: var(--err); }
+        .config-panel-v2 footer .save-state.warn { color: var(--warn); }
+
+        /* Poignées de redimensionnement (bords + coins) */
+        .panel-resize-edge {
+            position: absolute;
+            z-index: 25;
             touch-action: none;
         }
-        .panel-header-drag:active { cursor: grabbing; }
-        .panel-header-drag .header-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-left: auto; }
+        .panel-resize-edge[data-resize="e"] {
+            top: 44px; right: 0; bottom: 16px; width: 6px;
+            cursor: ew-resize;
+        }
+        .panel-resize-edge[data-resize="w"] {
+            top: 44px; left: 0; bottom: 16px; width: 6px;
+            cursor: ew-resize;
+        }
+        .panel-resize-edge[data-resize="s"] {
+            left: 16px; right: 16px; bottom: 0; height: 6px;
+            cursor: ns-resize;
+        }
         .panel-resize-handle {
             position: absolute;
-            bottom: 0; right: 0;
-            width: 16px; height: 16px;
-            background: rgba(255,255,255,0.08);
-            cursor: se-resize;
+            width: 16px;
+            height: 16px;
+            z-index: 30;
             touch-action: none;
-            z-index: 2;
         }
-        .panel-resize-handle:hover { background: rgba(255,255,255,0.25); }
+        .panel-resize-handle[data-resize="se"] {
+            right: 2px; bottom: 2px;
+            cursor: nwse-resize;
+        }
+        .panel-resize-handle[data-resize="se"]::after {
+            content: '';
+            position: absolute;
+            right: 3px; bottom: 3px;
+            width: 9px; height: 9px;
+            border-right: 2px solid rgba(148, 160, 180, 0.55);
+            border-bottom: 2px solid rgba(148, 160, 180, 0.55);
+            border-bottom-right-radius: 2px;
+            transition: border-color 0.15s;
+        }
+        .panel-resize-handle[data-resize="se"]:hover::after {
+            border-color: var(--ac);
+        }
+        .panel-resize-handle[data-resize="sw"] {
+            left: 2px; bottom: 2px;
+            cursor: nesw-resize;
+        }
+
+        /* =====================================================================
+           ONBOARDING — Style harmonisé avec configuration.html
+           ===================================================================== */
+        #onboarding-modal {
+            color-scheme: dark;
+            --bg: #0f1218;
+            --pn: #151a23;
+            --pn2: #1b212c;
+            --tx: #e6ebf3;
+            --mu: #94a0b4;
+            --ln: #28303d;
+            --ac: #7f93ff;
+            --ac2: #232c48;
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(11, 14, 20, 0.88);
+            backdrop-filter: blur(8px);
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            z-index: 9500;
+            pointer-events: auto;
+            font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+            color: var(--tx);
+        }
+        .onboarding-box {
+            width: min(520px, 100%);
+            background: var(--pn);
+            border: 1px solid var(--ln);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.72);
+            color: var(--tx);
+        }
+        .onboarding-box h2 {
+            margin: 0 0 6px;
+            font-size: 18px;
+            color: var(--tx);
+        }
+        .onboarding-box > p {
+            margin: 0 0 14px;
+            color: var(--mu);
+            font-size: 12px;
+        }
+        .onboarding-box .ob-body {
+            display: grid;
+            gap: 12px;
+        }
+        .onboarding-box label.field {
+            display: grid;
+            gap: 4px;
+            font-size: 12px;
+            color: var(--mu);
+        }
+        .onboarding-box input {
+            width: 100%;
+            box-sizing: border-box;
+            background: var(--bg);
+            color: var(--tx);
+            border: 1px solid var(--ln);
+            border-radius: 8px;
+            padding: 8px 10px;
+            font: inherit;
+        }
+        .onboarding-box input:focus-visible {
+            outline: 2px solid var(--ac);
+            outline-offset: 1px;
+        }
+        .onboarding-box .note {
+            font-size: 11px;
+            color: var(--mu);
+            margin: 0;
+        }
+        .onboarding-box .actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 6px;
+        }
+        .onboarding-box button {
+            background: var(--ac2);
+            color: var(--tx);
+            border: 1px solid var(--ln);
+            border-radius: 8px;
+            padding: 8px 14px;
+            font: inherit;
+            cursor: pointer;
+        }
+        .onboarding-box button.primary {
+            background: var(--ac);
+            border-color: var(--ac);
+            color: #0b0f16;
+            font-weight: 600;
+        }
+        .onboarding-box button.ghost {
+            background: transparent;
+            color: var(--tx);
+        }
+        .onboarding-box button.btn-inline-link {
+            background: transparent;
+            border: 1px solid transparent;
+            color: var(--ac);
+            padding: 2px 6px;
+            font-size: 11px;
+        }
+        .onboarding-box .status {
+            font-size: 11px;
+            color: #ff7373;
+        }
     </style>
-  <script type="module" crossorigin src="/assets/index-n50T6H-P.js"></script>
+  <script type="module" crossorigin src="./assets/index-CKHjFDhP.js"></script>
 </head>
 <body>
-    <!-- OVERLAY APP: conteneur de l'avatar (drag/resize) -->
     <div id="avatar-container">
         <div id="scene"></div>
-
         <!-- Bouton micro attaché au bas-centre exact du conteneur (suit l'avatar) -->
         <button id="mic-btn" class="mic-button" title="Activer le microphone">🎤</button>
+        <button id="cfg-open-btn" class="cfg-fab-btn" type="button" title="Ouvrir Sarra · Configuration (Ctrl+Shift+K)">⚙️</button>
     </div>
 
-    <!-- OVERLAY APP: modal d'onboarding (premier démarrage) -->
+    <!-- Modal d'onboarding premier démarrage -->
     <div id="onboarding-modal">
-        <div class="modal-content">
-            <h2 style="margin-top:0">Premier démarrage</h2>
-            <input id="apiKey" type="text" placeholder="Clé API Gemini" />
-            <button id="btn-create-gemini-key" type="button" style="margin:8px 0;background:#1a73e8;color:#fff;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;width:100%;font-size:14px;">
-                🔑 Créer ma clé API Gemini (ouvre Google AI Studio)
-            </button>
-            <p style="font-size:12px;color:#aaa;margin:4px 0;">Une seule clé suffit. Elle reste stockée localement sur cet ordinateur.</p>
-            <input id="userName" type="text" placeholder="Votre nom" />
-            <input id="avatarName" type="text" placeholder="Nom de l'avatar" />
-            <button id="btn-save-onboard">Sauvegarder</button>
+        <div class="onboarding-box" role="dialog" aria-labelledby="onboarding-title" aria-modal="true">
+            <h2 id="onboarding-title">Bienvenue dans Sarra</h2>
+            <p>Quelques instants de personnalisation : le nom de votre avatar, le vôtre, et votre clé API Gemini (voix et raisonnement par défaut).</p>
+            <div class="ob-body">
+                <label class="field">Nom de l'avatar
+                    <input type="text" id="avatarName" maxlength="40" autocomplete="off" value="Sarra" placeholder="Sarra">
+                </label>
+                <label class="field">Votre nom
+                    <input type="text" id="userName" maxlength="40" autocomplete="off" placeholder="Votre prénom">
+                </label>
+                <label class="field">Clé API Gemini
+                    <input type="password" id="apiKey" autocomplete="off" spellcheck="false" placeholder="AIza…">
+                </label>
+                <p class="note">Sans clé, vous pourrez l'ajouter plus tard avec <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd>. <button type="button" id="btn-create-gemini-key" class="btn-inline-link">Obtenir une clé ↗</button></p>
+                <div class="actions">
+                    <button type="button" id="btn-start-sarra" class="primary" onclick="document.getElementById('btn-save-onboard').click()">Commencer</button>
+                    <button type="button" id="btn-save-onboard" hidden>Sauvegarder</button>
+                    <button type="button" id="btn-skip-onboarding" class="ghost">Plus tard</button>
+                    <span id="ob-status" class="status" role="status" aria-live="polite"></span>
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- OVERLAY APP: Panneau de configuration professionnel v2 -->
-    <div id="config-panel" class="config-panel-v2">
-      <!-- Barre de titre draggable -->
-      <div class="panel-header-drag">
-        <div class="header-left">
-          <div class="logo-icon">🤖</div>
-          <div>
-            <h2>Sarra Studio</h2>
-            <span class="version-badge">v2.0 Pro</span>
-          </div>
-        </div>
-        <div class="header-actions">
-          <button id="cfg-minimize" class="close-btn" title="Réduire fenêtre">—</button>
-          <button id="cfg-close" class="close-btn" title="Fermer">✕</button>
-        </div>
-      </div>
+    <!-- Panneau de configuration (déplaçable à la souris + redimensionnable) -->
+    <div id="config-panel" class="config-panel-v2" role="dialog" aria-label="Sarra · Configuration">
+        <header class="panel-header-drag">
+            <span class="grip" id="drag-handle" title="Glisser pour déplacer la fenêtre" aria-hidden="true">⣿</span>
+            <h1>Sarra · Configuration</h1>
+            <span class="badge" id="saved-badge">sauvegardé</span>
+            <span class="spacer"></span>
+            <span class="hint"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> ferme · <kbd>Ctrl</kbd>+<kbd>S</kbd> sauvegarde</span>
+            <span id="panel-size-hud" class="size-pill" title="Dimensions du panneau">640 × 760</span>
+            <button id="cfg-reset-layout" type="button" class="ghost icon-btn" title="Réinitialiser position et taille">↺</button>
+            <button id="cfg-minimize" type="button" class="ghost icon-btn" title="Replier / Déplier">—</button>
+            <button id="cfg-close" type="button" class="ghost" title="Fermer (Échap)">Fermer</button>
+        </header>
 
-      <!-- Handle de resize (coin inférieur droit) -->
-      <div class="panel-resize-handle"></div>
+        <main class="panel-body">
+            <!-- 1. Identité -->
+            <section>
+                <h2>Identité</h2>
+                <div class="body">
+                    <div class="row">
+                        <label class="field">Nom de l'avatar
+                            <input id="cfg-avatar-name" type="text" maxlength="40" autocomplete="off" placeholder="Sarra">
+                        </label>
+                        <label class="field">Votre nom (utilisateur)
+                            <input id="cfg-user-name" type="text" maxlength="40" autocomplete="off" placeholder="Votre prénom">
+                        </label>
+                    </div>
+                    <p class="note">Ces noms personnalisent l'identité envoyée à l'IA : l'avatar se présente avec son nom et s'adresse à vous par le vôtre.</p>
+                </div>
+            </section>
 
-      <nav class="panel-tabs">
-        <button class="tab-btn active" data-tab="ia">🧠 IA</button>
-        <button class="tab-btn" data-tab="voice">🎙️ Voix</button>
-        <button class="tab-btn" data-tab="lipsync">👄 Lipsync</button>
-        <button class="tab-btn" data-tab="emotions">😊 Émotions</button>
-        <button class="tab-btn" data-tab="directives">📜 Directives</button>
-        <button class="tab-btn" data-tab="memory">💾 Mémoire</button>
-      </nav>
+            <!-- 2. Moteurs IA et voix -->
+            <section>
+                <h2>Moteurs IA et voix</h2>
+                <div class="body">
+                    <div class="row">
+                        <label class="field">Moteur de raisonnement
+                            <select id="cfg-reasoning-provider">
+                                <option value="gemini">Gemini · Flash-Lite (par défaut)</option>
+                                <option value="groq">Groq · Llama 3.3 70B</option>
+                                <option value="openrouter">OpenRouter · Modèles gratuits</option>
+                            </select>
+                        </label>
+                        <label class="field">Modèle Gemini prioritaire
+                            <select id="cfg-reasoning-model">
+                                <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (recommandé)</option>
+                                <option value="gemini-flash-lite-latest">Gemini Flash-Lite Latest</option>
+                                <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="row">
+                        <label class="field">Synthèse vocale (Voix)
+                            <select id="cfg-tts-provider">
+                                <option value="gemini-tts">Gemini TTS · voix neurale HD (par défaut)</option>
+                                <option value="elevenlabs">ElevenLabs · voix ultra-réaliste</option>
+                                <option value="browser">Navigateur / Système · Web Speech</option>
+                            </select>
+                        </label>
+                        <label class="field">Voix Gemini TTS
+                            <select id="cfg-gemini-tts-voice">
+                                <option value="Kore">Kore (Féminine douce · défaut)</option>
+                                <option value="Aoede">Aoede (Féminine expressive)</option>
+                                <option value="Leda">Leda (Féminine posée)</option>
+                                <option value="Zephyr">Zephyr (Claire & dynamique)</option>
+                                <option value="Puck">Puck (Vif)</option>
+                                <option value="Charon">Charon (Grave)</option>
+                                <option value="Fenrir">Fenrir (Profonde)</option>
+                                <option value="Orus">Orus (Posée)</option>
+                            </select>
+                        </label>
+                    </div>
+                    <label class="field">
+                        <span>Clé API Gemini <span id="key-badge-gemini" class="key-badge">non configurée</span></span>
+                        <div class="input-secret">
+                            <input id="cfg-gemini-key" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…">
+                            <button type="button" class="btn-eye" data-toggle-secret="cfg-gemini-key" title="Afficher/masquer la clé">👁️</button>
+                        </div>
+                    </label>
+                    <div class="inline">
+                        <button type="button" class="btn-test" data-test="gemini">Tester la clé</button>
+                        <button type="button" class="btn-test" data-test="gemini-tts">Écouter la voix</button>
+                        <a class="api-link btn-link-ghost" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Obtenir une clé ↗</a>
+                        <span id="status-gemini" class="status-indicator" aria-live="polite"></span>
+                        <span id="status-gemini-tts" class="status-indicator" aria-live="polite"></span>
+                    </div>
 
-      <div class="panel-body">
-        <!-- ONGLET 1 : Moteurs IA -->
-        <div class="tab-content active" id="tab-ia">
-          <h3>Moteur de raisonnement</h3>
-          <p class="tab-description">Choisissez l'IA qui fait penser Sarra. Basculement automatique en cas d'échec.</p>
+                    <label class="toggle">
+                        <input id="cfg-auto-fallback" type="checkbox" checked>
+                        <span>Bascule automatique entre modèles Gemini (Fallback)
+                            <small>Bascule automatiquement vers les autres modèles Flash-Lite en cas de quota ou surcharge.</small>
+                        </span>
+                    </label>
+                    <label class="toggle">
+                        <input id="cfg-screen-vision" type="checkbox" checked>
+                        <span>Vision d'écran IA
+                            <small>Capture et compresse l'écran à chaque requête pour répondre sur ce que vous affichez.</small>
+                        </span>
+                    </label>
+                    <div class="inline">
+                        <button id="btn-test-vision" type="button" class="ghost">Tester la capture d'écran</button>
+                        <span id="status-vision" class="status-indicator" aria-live="polite"></span>
+                    </div>
+                    <img id="vision-preview" alt="Aperçu capture écran" style="display:none;max-width:100%;max-height:140px;border-radius:8px;border:1px solid var(--ln);object-fit:contain;background:#000">
 
-          <div class="provider-list">
-            <div class="provider-card">
-              <div class="provider-header">
-                <span class="provider-name">⚙️ Modèle actif</span>
-                <span class="provider-badge free">Bascule auto</span>
-              </div>
-              <div class="provider-info">Modèle prioritaire pour le raisonnement. Les modèles Lite de secours prennent le relais en cas de 503 / 429 / 404.</div>
-              <select id="cfg-reasoning-model">
-                <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (recommandé)</option>
-                <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (secours)</option>
-                <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (ancien)</option>
-              </select>
-            </div>
-            <div class="provider-card active" data-provider="gemini">
-              <div class="provider-header">
-                <span class="provider-name">Google Gemini 2.5 Flash Lite</span>
-                <span class="provider-badge recommended">Recommandé</span>
-              </div>
-              <div class="provider-info">Rapide et stable (fallback Lite automatique), excellent en français</div>
-              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" class="api-link">🔑 Obtenir une clé gratuite</a>
-              <input type="password" id="cfg-gemini-key" placeholder="Collez votre clé API (AIza... / AQ...)" />
-              <div class="provider-actions">
-                <button class="btn-test" data-test="gemini">🧪 Tester</button>
-                <span class="status-indicator" id="status-gemini"></span>
-              </div>
-            </div>
+                    <details id="alt-providers-details" class="alt-keys">
+                        <summary>Fournisseurs alternatifs, voix système &amp; mode démo (Groq, OpenRouter, ElevenLabs, Web Speech)</summary>
+                        <div class="alt-body">
+                            <label class="field">
+                                <span>Clé Gemini TTS dédiée (optionnelle — utilise la clé Gemini sinon) <span id="key-badge-gemini-tts" class="key-badge">auto</span></span>
+                                <div class="input-secret">
+                                    <input id="cfg-gemini-tts-key" type="password" autocomplete="off" spellcheck="false" placeholder="AIza…">
+                                    <button type="button" class="btn-eye" data-toggle-secret="cfg-gemini-tts-key" title="Afficher/masquer">👁️</button>
+                                </div>
+                            </label>
 
-            <div class="provider-card" data-provider="groq">
-              <div class="provider-header">
-                <span class="provider-name">Groq (Llama 3.3 70B)</span>
-                <span class="provider-badge">Ultra-rapide</span>
-              </div>
-              <div class="provider-info">14 000 tokens/min gratuit, API OpenAI-compatible</div>
-              <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer" class="api-link">🔑 Obtenir une clé gratuite</a>
-              <input type="password" id="cfg-groq-key" placeholder="gsk_..." />
-              <div class="provider-actions">
-                <button class="btn-test" data-test="groq">🧪 Tester</button>
-                <span class="status-indicator" id="status-groq"></span>
-              </div>
-            </div>
+                            <label class="field">
+                                <span>Clé API Groq <span id="key-badge-groq" class="key-badge">non configurée</span></span>
+                                <div class="input-secret">
+                                    <input id="cfg-groq-key" type="password" autocomplete="off" spellcheck="false" placeholder="gsk_…">
+                                    <button type="button" class="btn-eye" data-toggle-secret="cfg-groq-key" title="Afficher/masquer">👁️</button>
+                                </div>
+                            </label>
+                            <div class="inline">
+                                <button type="button" class="btn-test" data-test="groq">Tester Groq</button>
+                                <a class="api-link btn-link-ghost" href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Obtenir une clé ↗</a>
+                                <span id="status-groq" class="status-indicator" aria-live="polite"></span>
+                            </div>
 
-            <div class="provider-card" data-provider="openrouter">
-              <div class="provider-header">
-                <span class="provider-name">OpenRouter (Multi-modèles)</span>
-                <span class="provider-badge">Gratuit</span>
-              </div>
-              <div class="provider-info">Accès à 100+ modèles, fallback automatique</div>
-              <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" class="api-link">🔑 Obtenir une clé gratuite</a>
-              <input type="password" id="cfg-openrouter-key" placeholder="sk-or-..." />
-              <div class="provider-actions">
-                <button class="btn-test" data-test="openrouter">🧪 Tester</button>
-                <span class="status-indicator" id="status-openrouter"></span>
-              </div>
-            </div>
+                            <label class="field">
+                                <span>Clé API OpenRouter <span id="key-badge-openrouter" class="key-badge">non configurée</span></span>
+                                <div class="input-secret">
+                                    <input id="cfg-openrouter-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-or-…">
+                                    <button type="button" class="btn-eye" data-toggle-secret="cfg-openrouter-key" title="Afficher/masquer">👁️</button>
+                                </div>
+                            </label>
+                            <div class="inline">
+                                <button type="button" class="btn-test" data-test="openrouter">Tester OpenRouter</button>
+                                <a class="api-link btn-link-ghost" href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">Obtenir une clé ↗</a>
+                                <span id="status-openrouter" class="status-indicator" aria-live="polite"></span>
+                            </div>
 
-            <div class="provider-card" data-provider="vision">
-              <div class="provider-header">
-                <span class="provider-name">👁️ Vision écran</span>
-                <span class="provider-badge">Capture locale</span>
-              </div>
-              <div class="provider-info">Sarra voit votre écran pour répondre au contexte. Image envoyée à Gemini, jamais stockée.</div>
-              <label class="switch-label">
-                <input type="checkbox" id="cfg-screen-vision" checked />
-                <span class="switch-slider"></span>
-                <span>Activer la vision écran</span>
-              </label>
-              <div class="provider-actions">
-                <button class="btn-test" id="btn-test-vision">📸 Tester la capture</button>
-                <span class="status-indicator" id="status-vision"></span>
-              </div>
-              <img id="vision-preview" style="display:none; width:100%; border-radius:8px; margin-top:8px;" />
-            </div>
-          </div>
+                            <div class="row">
+                                <label class="field">
+                                    <span>Clé API ElevenLabs <span id="key-badge-elevenlabs" class="key-badge">non configurée</span></span>
+                                    <div class="input-secret">
+                                        <input id="cfg-elevenlabs-key" type="password" autocomplete="off" spellcheck="false" placeholder="Clé ElevenLabs…">
+                                        <button type="button" class="btn-eye" data-toggle-secret="cfg-elevenlabs-key" title="Afficher/masquer">👁️</button>
+                                    </div>
+                                </label>
+                                <label class="field">Voix ElevenLabs
+                                    <select id="cfg-elevenlabs-voice">
+                                        <option value="Rachel">Rachel (Féminine douce)</option>
+                                        <option value="Domi">Domi (Féminine énergique)</option>
+                                        <option value="Bella">Bella (Féminine chaleureuse)</option>
+                                        <option value="Antoni">Antoni (Masculin posé)</option>
+                                        <option value="Elli">Elli (Jeune féminine)</option>
+                                        <option value="Josh">Josh (Masculin grave)</option>
+                                        <option value="Arnold">Arnold (Masculin robuste)</option>
+                                        <option value="Adam">Adam (Narration)</option>
+                                        <option value="Sam">Sam (Masculin naturel)</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <div class="inline">
+                                <button type="button" class="btn-test" data-test="elevenlabs">Tester ElevenLabs</button>
+                                <span id="status-elevenlabs" class="status-indicator" aria-live="polite"></span>
+                            </div>
 
-          <div class="fallback-config">
-            <label class="switch-label">
-              <input type="checkbox" id="cfg-auto-fallback" checked />
-              <span class="switch-slider"></span>
-              <span>Basculement automatique si un modèle échoue</span>
-            </label>
-          </div>
-        </div>
+                            <div class="row">
+                                <label class="field">Voix Navigateur / Système (Web Speech)
+                                    <select id="cfg-browser-voice"></select>
+                                </label>
+                                <div class="field" style="align-self:end">
+                                    <div class="inline">
+                                        <button type="button" class="btn-test" data-test="browser-voice">Écouter voix système</button>
+                                        <span id="status-browser-voice" class="status-indicator" aria-live="polite"></span>
+                                    </div>
+                                </div>
+                            </div>
 
-        <!-- ONGLET 2 : Moteurs de voix -->
-        <div class="tab-content" id="tab-voice">
-          <h3>Moteur de synthèse vocale (TTS)</h3>
-          <p class="tab-description">Voix humaines réalistes pour Sarra.</p>
+                            <label class="toggle">
+                                <input id="cfg-demo-mode" type="checkbox">
+                                <span>Mode Démo / Cache hors-ligne
+                                    <small>Sert les réponses pré-générées depuis le cache local sans consommer de quota.</small>
+                                </span>
+                            </label>
+                            <div class="inline">
+                                <button id="btn-precache-demo" type="button" class="ghost">Pré-générer 10 réponses démo</button>
+                                <span id="precache-status" class="status" aria-live="polite"></span>
+                            </div>
+                        </div>
+                    </details>
+                    <p class="note">Les clés sont enregistrées localement dans le navigateur/application. Gemini est la voix et le moteur de raisonnement par défaut.</p>
+                </div>
+            </section>
 
-          <div class="provider-list">
-            <div class="provider-card" data-provider="browser">
-              <div class="provider-header">
-                <span class="provider-name">Synthèse navigateur</span>
-                <span class="provider-badge free">100% gratuit</span>
-              </div>
-              <div class="provider-info">Voix système (Microsoft Julie, Google FR)</div>
-              <select id="cfg-browser-voice"></select>
-              <div class="provider-actions">
-                <button class="btn-test" data-test="browser-voice">🔊 Tester voix</button>
-              </div>
-            </div>
+            <!-- 3. Directives principales -->
+            <section>
+                <h2>Directives principales de l'avatar</h2>
+                <div class="body">
+                    <label class="field">Comportement, ton et personnalité (4000 caractères)
+                        <textarea id="cfg-core-directives" maxlength="4000" spellcheck="true" placeholder="Décrivez la personnalité de l'avatar…"></textarea>
+                    </label>
+                    <div class="inline">
+                        <select id="directive-template" aria-label="Modèle de directives" style="max-width:200px">
+                            <option value="">Modèle…</option>
+                            <option value="friendly">Amicale</option>
+                            <option value="professional">Professionnelle</option>
+                            <option value="pedagogical">Pédagogue</option>
+                            <option value="humorous">Humoristique</option>
+                        </select>
+                        <div class="chip-row">
+                            <button type="button" class="chip-btn btn-preset" data-preset="friendly">Amicale</button>
+                            <button type="button" class="chip-btn btn-preset" data-preset="professional">Pro</button>
+                            <button type="button" class="chip-btn btn-preset" data-preset="pedagogical">Pédagogue</button>
+                            <button type="button" class="chip-btn btn-preset" data-preset="humorous">Humour</button>
+                        </div>
+                        <span class="status"><span id="directive-count">0</span> / 4000</span>
+                        <span style="flex:1"></span>
+                        <button id="reset-directives" type="button" class="ghost">Réinitialiser</button>
+                    </div>
+                    <p class="note">Les directives sont combinées à l'identité et à la mémoire persistante avant chaque réponse.</p>
+                </div>
+            </section>
 
-            <div class="provider-card" data-provider="elevenlabs">
-              <div class="provider-header">
-                <span class="provider-name">ElevenLabs</span>
-                <span class="provider-badge">Freemium</span>
-              </div>
-              <div class="provider-info">10 000 caractères/mois gratuits, voix ultra-réalistes</div>
-              <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noreferrer" class="api-link">🔑 Clé gratuite</a>
-              <input type="password" id="cfg-elevenlabs-key" placeholder="xi-..." />
-              <select id="cfg-elevenlabs-voice">
-                <option value="Rachel">Rachel (Femme, douce)</option>
-                <option value="Domi">Domi (Femme, jeune)</option>
-                <option value="Bella">Bella (Femme, mature)</option>
-                <option value="Antoni">Antoni (Homme)</option>
-              </select>
-              <div class="provider-actions">
-                <button class="btn-test" data-test="elevenlabs">🔊 Tester voix</button>
-                <span class="status-indicator" id="status-elevenlabs"></span>
-              </div>
-            </div>
+            <!-- 4. Mémoire persistante -->
+            <section>
+                <h2>Mémoire persistante</h2>
+                <div class="body">
+                    <label class="toggle">
+                        <input id="cfg-memory-enabled" type="checkbox" checked>
+                        <span>Mémoire de l'avatar
+                            <small>Conserve les derniers échanges (plafond 10) pour assurer la continuité conversationnelle.</small>
+                        </span>
+                    </label>
+                    <div class="row">
+                        <label class="field">Taille maximale (0 à 10 échanges)
+                            <input id="cfg-memory-size" type="number" min="0" max="10" step="1" value="10">
+                        </label>
+                        <div class="field" style="align-self:end">
+                            <div class="stats" id="memory-stats"></div>
+                        </div>
+                    </div>
+                    <ul class="memory-list" id="memory-preview"></ul>
+                    <div class="inline">
+                        <button id="btn-view-memory" type="button" class="ghost">Rafraîchir</button>
+                        <button id="btn-clear-memory" type="button" class="danger">Effacer la mémoire</button>
+                        <span id="memory-status" class="status" aria-live="polite"></span>
+                    </div>
+                </div>
+            </section>
 
-            <div class="provider-card active" data-provider="gemini-tts">
-              <div class="provider-header">
-                <span class="provider-name">Gemini TTS (Kore, Aoede)</span>
-                <span class="provider-badge">Nouveau</span>
-              </div>
-              <div class="provider-info">Voix IA natives de Google, qualité studio</div>
-              <input type="password" id="cfg-gemini-tts-key" placeholder="Clé Gemini (reuse)" />
-              <select id="cfg-gemini-tts-voice">
-                <option value="Kore" selected>Kore (Femme, naturelle)</option>
-                <option value="Aoede">Aoede (Femme, chaude)</option>
-                <option value="Puck">Puck (Homme)</option>
-                <option value="Charon">Charon (Homme, grave)</option>
-              </select>
-              <div class="provider-actions">
-                <button class="btn-test" data-test="gemini-tts">🔊 Tester voix</button>
-                <span class="status-indicator" id="status-gemini-tts"></span>
-              </div>
-            </div>
-          </div>
-        </div>
+            <!-- 5. Lipsync et mâchoire -->
+            <section>
+                <h2>Lipsync et mâchoire</h2>
+                <div class="body">
+                    <div class="row">
+                        <label class="field">
+                            <span class="field-head">Sensibilité micro / audio <output id="val-lip-sensitivity">1.0</output></span>
+                            <input id="cfg-lip-sensitivity" type="range" min="0.1" max="3" step="0.1" value="1">
+                        </label>
+                        <label class="field">
+                            <span class="field-head">Vitesse / réactivité <output id="val-lip-speed">1.0</output></span>
+                            <input id="cfg-lip-speed" type="range" min="0.5" max="2" step="0.1" value="1">
+                        </label>
+                    </div>
+                    <div class="row">
+                        <label class="field">
+                            <span class="field-head">Amplitude de la mâchoire <output id="val-lip-jaw">1.0</output></span>
+                            <input id="cfg-lip-jaw" type="range" min="0.1" max="2" step="0.1" value="1">
+                        </label>
+                        <label class="field">
+                            <span class="field-head">Fluidité / lissage <output id="val-lip-smoothing">0.10</output></span>
+                            <input id="cfg-lip-smoothing" type="range" min="0" max="0.9" step="0.05" value="0.1">
+                        </label>
+                    </div>
+                    <label class="field">
+                        <span class="field-head">Seuil de silence <output id="val-lip-threshold">0.05</output></span>
+                        <input id="cfg-lip-threshold" type="range" min="0" max="0.3" step="0.01" value="0.05">
+                    </label>
+                    <label class="toggle">
+                        <input id="cfg-lip-teeth" type="checkbox" checked>
+                        <span>Dents visibles lors de la parole
+                            <small>Anime les maillages dentaires conjointement à la mâchoire pendant la synthèse vocale.</small>
+                        </span>
+                    </label>
+                    <div class="inline">
+                        <button id="btn-test-lipsync" type="button">Tester le lipsync</button>
+                        <button id="btn-auto-calibrate" type="button">Calibration auto</button>
+                        <button id="btn-reset-lipsync" type="button" class="ghost">Valeurs par défaut</button>
+                        <span id="calibration-status" class="status" aria-live="polite"></span>
+                    </div>
+                    <p class="note">Les réglages s'appliquent en direct sur l'avatar. Cliquez sur « Sauvegarder » pour confirmer l'enregistrement.</p>
+                </div>
+            </section>
 
-        <!-- ONGLET 3 : Lipsync -->
-        <div class="tab-content" id="tab-lipsync">
-          <h3>Calibration du Lipsync</h3>
-          <p class="tab-description">Ajustez la synchronisation labiale pour un rendu naturel.</p>
+            <!-- 6. Expressions et émotions -->
+            <section>
+                <h2>Expressions et émotions</h2>
+                <div class="body">
+                    <div class="scale-grid">
+                        <label class="field">
+                            <span class="field-head">Fréquence clignement <output id="val-emo-blink-rate">4s</output></span>
+                            <input id="cfg-emo-blink-rate" type="range" min="1" max="10" step="1" value="4">
+                        </label>
+                        <label class="field">
+                            <span class="field-head">Amplitude clignement <output id="val-emo-blink">0.8</output></span>
+                            <input id="cfg-emo-blink" type="range" min="0" max="1" step="0.1" value="0.8">
+                        </label>
+                        <label class="field">
+                            <span class="field-head">Mouvements tête / cou <output id="val-emo-neck">0.08</output></span>
+                            <input id="cfg-emo-neck" type="range" min="0" max="0.3" step="0.02" value="0.08">
+                        </label>
+                        <label class="field">
+                            <span class="field-head">Ampleur respiration <output id="val-emo-breath">0.015</output></span>
+                            <input id="cfg-emo-breath" type="range" min="0" max="0.05" step="0.005" value="0.015">
+                        </label>
+                        <label class="field">
+                            <span class="field-head">Saccades du regard <output id="val-emo-gaze">0.03</output></span>
+                            <input id="cfg-emo-gaze" type="range" min="0" max="0.15" step="0.01" value="0.03">
+                        </label>
+                        <label class="field">
+                            <span class="field-head">Sourcils / colère <output id="val-emo-brow">0.10</output></span>
+                            <input id="cfg-emo-brow" type="range" min="0" max="1" step="0.05" value="0.1">
+                        </label>
+                    </div>
+                    <div class="chip-row" id="emotion-preview-buttons" aria-label="Tester une expression sur l'avatar">
+                        <button type="button" class="chip-btn active" data-preview-emotion="neutral">Neutre</button>
+                        <button type="button" class="chip-btn" data-preview-emotion="happy">Joie</button>
+                        <button type="button" class="chip-btn" data-preview-emotion="relaxed">Détendu</button>
+                        <button type="button" class="chip-btn" data-preview-emotion="surprised">Surprise</button>
+                        <button type="button" class="chip-btn" data-preview-emotion="sad">Tristesse</button>
+                        <button type="button" class="chip-btn" data-preview-emotion="angry">Colère</button>
+                    </div>
+                    <div class="inline">
+                        <button id="btn-reset-emotions" type="button" class="ghost">Réinitialiser les émotions</button>
+                        <span id="emotion-status" class="status" aria-live="polite"></span>
+                    </div>
+                </div>
+            </section>
 
-          <div class="slider-group">
-            <label>
-              <span class="slider-label">Sensibilité globale</span>
-              <input type="range" id="cfg-lip-sensitivity" min="0.3" max="2" step="0.1" value="1" />
-              <span class="slider-value" id="val-lip-sensitivity">1.0</span>
-            </label>
-            <label>
-              <span class="slider-label">Vitesse d'ouverture</span>
-              <input type="range" id="cfg-lip-speed" min="0.5" max="2" step="0.1" value="1" />
-              <span class="slider-value" id="val-lip-speed">1.0</span>
-            </label>
-            <label>
-              <span class="slider-label">Amplitude mâchoire (jawOpen)</span>
-              <input type="range" id="cfg-lip-jaw" min="0.3" max="1.5" step="0.1" value="1" />
-              <span class="slider-value" id="val-lip-jaw">1.0</span>
-            </label>
-            <label>
-              <span class="slider-label">Lissage temporel</span>
-              <input type="range" id="cfg-lip-smoothing" min="0" max="0.3" step="0.05" value="0.1" />
-              <span class="slider-value" id="val-lip-smoothing">0.10</span>
-            </label>
-            <label>
-              <span class="slider-label">Seuil d'activation (bruit de fond)</span>
-              <input type="range" id="cfg-lip-threshold" min="0" max="0.3" step="0.02" value="0.05" />
-              <span class="slider-value" id="val-lip-threshold">0.05</span>
-            </label>
-          </div>
+            <!-- 7. Fenêtre avatar & panneau -->
+            <section>
+                <h2>Fenêtre avatar &amp; panneau</h2>
+                <div class="body">
+                    <div class="inline">
+                        <button id="btn-reset-avatar-pos" type="button" class="ghost">Recentrer l'avatar</button>
+                        <button id="btn-reset-panel-pos" type="button" class="ghost">Recentrer les réglages</button>
+                        <span id="bounds-info" class="status"></span>
+                    </div>
+                    <p class="note">Glissez la moitié haute de l'avatar pour le déplacer et le coin bas-droit pour le redimensionner. Ce panneau se déplace par sa barre de titre (ou la poignée ⣿) et se redimensionne par ses bords et coins.</p>
+                </div>
+            </section>
 
-          <div class="calibration-section">
-            <h4>Calibration automatique</h4>
-            <p class="tab-description">Sarra prononce une phrase de test et ajuste automatiquement les paramètres.</p>
-            <button class="btn-primary btn-calibrate" id="btn-auto-calibrate">🎯 Lancer la calibration auto</button>
-            <div class="calibration-status" id="calibration-status"></div>
-          </div>
+            <!-- 8. Configuration par défaut -->
+            <section>
+                <h2>Configuration par défaut</h2>
+                <div class="body">
+                    <p class="note">« Sauvegarder » enregistre toutes les modifications comme configuration locale par défaut. « Réinitialiser à l'usine » restaure les paramètres d'origine.</p>
+                    <div class="inline">
+                        <button id="btn-factory-reset" type="button" class="danger">Réinitialiser à l'usine</button>
+                    </div>
+                </div>
+            </section>
+        </main>
 
-          <div class="manual-calibration">
-            <h4>Calibration manuelle</h4>
-            <button class="btn-secondary" id="btn-test-lipsync">🗣️ Prononcer "Bonjour, je suis Sarra"</button>
-          </div>
+        <footer class="panel-footer">
+            <button id="cfg-save" type="button" class="primary">Sauvegarder</button>
+            <span id="save-status" class="save-state" aria-live="polite"></span>
+            <span class="spacer"></span>
+            <button id="close-footer" type="button" class="ghost">Fermer</button>
+        </footer>
 
-          <label class="checkbox-label">
-            <input type="checkbox" id="cfg-lip-teeth" checked />
-            <span>Animer les dents (AvatarTeethLower)</span>
-          </label>
-        </div>
-
-        <!-- ONGLET 4 : Émotions -->
-        <div class="tab-content" id="tab-emotions">
-          <h3>Expressions et émotions</h3>
-          <p class="tab-description">Personnalisez le langage corporel de Sarra.</p>
-
-          <div class="slider-group">
-            <label>
-              <span class="slider-label">Fréquence de clignement</span>
-              <input type="range" id="cfg-emo-blink-rate" min="1" max="10" step="1" value="4" />
-              <span class="slider-value" id="val-emo-blink-rate">4s</span>
-            </label>
-            <label>
-              <span class="slider-label">Intensité du clignement</span>
-              <input type="range" id="cfg-emo-blink" min="0" max="1" step="0.1" value="0.8" />
-              <span class="slider-value" id="val-emo-blink">0.8</span>
-            </label>
-            <label>
-              <span class="slider-label">Inclinaison tête (réflexion)</span>
-              <input type="range" id="cfg-emo-neck" min="0" max="0.2" step="0.01" value="0.08" />
-              <span class="slider-value" id="val-emo-neck">0.08</span>
-            </label>
-            <label>
-              <span class="slider-label">Amplitude respiration idle</span>
-              <input type="range" id="cfg-emo-breath" min="0" max="0.05" step="0.005" value="0.015" />
-              <span class="slider-value" id="val-emo-breath">0.015</span>
-            </label>
-            <label>
-              <span class="slider-label">Micro-saccades du regard</span>
-              <input type="range" id="cfg-emo-gaze" min="0" max="0.1" step="0.01" value="0.03" />
-              <span class="slider-value" id="val-emo-gaze">0.03</span>
-            </label>
-            <label>
-              <span class="slider-label">Sourcils (réflexion)</span>
-              <input type="range" id="cfg-emo-brow" min="0" max="0.5" step="0.05" value="0.1" />
-              <span class="slider-value" id="val-emo-brow">0.10</span>
-            </label>
-          </div>
-        </div>
-
-        <!-- ONGLET 5 : Directives Core -->
-        <div class="tab-content" id="tab-directives">
-          <h3>Directives fondamentales de l'avatar</h3>
-          <p class="tab-description">Ces instructions définissent la personnalité et le comportement de Sarra. Elles sont envoyées à chaque requête IA.</p>
-
-          <div class="directive-presets">
-            <button class="btn-preset" data-preset="friendly">😊 Amicale</button>
-            <button class="btn-preset" data-preset="professional">💼 Professionnelle</button>
-            <button class="btn-preset" data-preset="pedagogical">🎓 Pédagogique</button>
-            <button class="btn-preset" data-preset="humorous">😄 Humoristique</button>
-          </div>
-
-          <textarea id="cfg-core-directives" rows="12" maxlength="2000" placeholder="Ex: Tu es Sarra, une assistante IA bienveillante. Tu parles en français, avec un ton naturel et chaleureux..."></textarea>
-          <div class="char-count"><span id="directive-count">0</span> / 2000 caractères</div>
-        </div>
-
-        <!-- ONGLET 6 : Mémoire -->
-        <div class="tab-content" id="tab-memory">
-          <h3>Mémoire persistante</h3>
-          <p class="tab-description">Sarra se souvient de vos échanges pour améliorer ses réponses.</p>
-
-          <label>
-            <span class="slider-label">Taille de la mémoire (derniers échanges)</span>
-            <input type="number" id="cfg-memory-size" min="0" max="50" value="10" />
-          </label>
-
-          <div class="demo-mode-section">
-            <label class="switch-label">
-              <input type="checkbox" id="cfg-demo-mode" />
-              <span class="switch-slider"></span>
-              <span>🎭 Mode Démonstration (cache activé)</span>
-            </label>
-            <p class="tab-description">Quand activé, Sarra rejoue les réponses déjà données sans appeler l'API. Zéro risque de quota.</p>
-            <button class="btn-primary" id="btn-precache-demo">📦 Pré-générer les réponses de démo</button>
-            <div class="precache-status" id="precache-status"></div>
-          </div>
-
-          <div class="memory-actions">
-            <button class="btn-secondary" id="btn-view-memory">👁️ Voir la mémoire</button>
-            <button class="btn-danger" id="btn-clear-memory">🗑️ Vider la mémoire</button>
-            <button class="btn-danger" id="btn-reset-all">⚠️ Réglages usine</button>
-          </div>
-
-          <div class="memory-preview" id="memory-preview">
-            <em>La mémoire est vide.</em>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel-footer">
-        <button class="btn-secondary" id="btn-factory-reset">↺ Réglages usine</button>
-        <button class="btn-primary" id="cfg-save">💾 Sauvegarder comme configuration par défaut</button>
-        <span class="save-status" id="save-status"></span>
-      </div>
+        <!-- Poignées de redimensionnement souris & tactile -->
+        <div class="panel-resize-edge" data-resize="e" aria-hidden="true"></div>
+        <div class="panel-resize-edge" data-resize="w" aria-hidden="true"></div>
+        <div class="panel-resize-edge" data-resize="s" aria-hidden="true"></div>
+        <div class="panel-resize-handle" data-resize="sw" aria-hidden="true"></div>
+        <div class="panel-resize-handle" data-resize="se" aria-hidden="true"></div>
     </div>
 
 </body>
