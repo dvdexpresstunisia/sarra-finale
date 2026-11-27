@@ -8,14 +8,28 @@ import {
     sanitizeNaturalLipsyncConfig
 } from './src/lipsync/natural-lipsync.js';
 
-// OVERLAY APP: Raccourci navigateur Ctrl+Shift+K (Electron utilise le raccourci IPC global).
+// OVERLAY APP: Raccourcis clavier panneau (Ctrl+Shift+K navigateur, Escape / Ctrl+S panneau ouvert).
 document.addEventListener('keydown', (event) => {
-    // En Electron, le raccourci est géré uniquement par IPC via preload.cjs (pas de doublon).
     const isElectronRenderer = !!(window.sarraAPI && typeof window.sarraAPI.onToggleConfig === 'function');
-    if (isElectronRenderer || !event.ctrlKey || !event.shiftKey || event.key.toLowerCase() !== 'k') return;
-    event.preventDefault();
     const panel = document.getElementById('config-panel');
-    if (panel) panel.style.display = getComputedStyle(panel).display === 'none' ? 'block' : 'none';
+    const panelOpen = Boolean(panel && (panel.classList.contains('is-open') || getComputedStyle(panel).display !== 'none'));
+
+    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'k') {
+        if (!isElectronRenderer) {
+            event.preventDefault();
+            toggleConfigPanel();
+        }
+        return;
+    }
+    if (!panelOpen) return;
+
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        toggleConfigPanel(false);
+    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        saveAllConfigV2();
+    }
 });
 
 // OVERLAY APP: Cache de démo — contourne les quotas API
@@ -75,6 +89,21 @@ function reuseLastScreenFrame(reason) {
 }
 
 async function captureScreenOnce() {
+  if (typeof window.sarraAPI?.captureScreen === 'function') {
+    try {
+      const dataUrl = await window.sarraAPI.captureScreen();
+      if (typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
+        const [meta, base64] = dataUrl.split(',');
+        const mimeMatch = meta.match(/^data:([^;]+);base64$/);
+        if (base64) {
+          const part = await downscaleImage(base64, mimeMatch?.[1] || 'image/jpeg');
+          if (part) return part;
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Capture Electron IPC indisponible, repli backend:', e?.message);
+    }
+  }
   const resp = await fetch(SCREENSHOT_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Sarra-Client': 'sarra-desktop' },
@@ -126,30 +155,46 @@ async function captureScreen() {
 }
 
 // OVERLAY APP: Pré-cache des questions probables de démo
+let preCacheRunning = false;
 async function preCacheDemoQuestions() {
+  if (preCacheRunning) return;
   const statusEl = document.getElementById('precache-status');
+  const btn = document.getElementById('btn-precache-demo');
+  const key = resolveDemoApiKey();
+  if (!key) {
+    if (statusEl) statusEl.textContent = '❌ Clé API Gemini manquante (onglet IA).';
+    return;
+  }
   const questions = [
     "bonjour", "bonjour ça va", "qui es-tu", "que peux-tu faire",
     "quelle heure est-il", "raconte-moi une blague", "merci", "au revoir",
     "comment vas-tu", "parle-moi de toi"
   ];
+  preCacheRunning = true;
+  if (btn) btn.disabled = true;
   if (statusEl) statusEl.textContent = `⏳ Pré-génération : 0/${questions.length}`;
   let done = 0;
-  for (const q of questions) {
-    try {
-      // Appel direct API (pas de voix, pas de cache)
-      const reply = (await callGeminiDirect(q, localStorage.getItem('apiKey') || localStorage.getItem('geminiKey')))?.text || '';
-      if (reply) {
-        localStorage.setItem(getDemoCacheKey(q), reply);
-        done++;
-        if (statusEl) statusEl.textContent = `⏳ Pré-génération : ${done}/${questions.length}`;
+  try {
+    const model = getPreferredReasoningModel();
+    for (const q of questions) {
+      try {
+        // Appel direct API (pas de voix, pas de cache)
+        const reply = (await callGeminiDirect(model, key, q, AbortSignal.timeout(8000)))?.text || '';
+        if (reply) {
+          localStorage.setItem(getDemoCacheKey(q), reply);
+          done++;
+          if (statusEl) statusEl.textContent = `⏳ Pré-génération : ${done}/${questions.length}`;
+        }
+      } catch (e) {
+        console.warn('Skip:', q, e.message);
       }
-    } catch (e) {
-      console.warn('Skip:', q, e.message);
+      await new Promise(r => setTimeout(r, 4000)); // Respect quota 15/min
     }
-    await new Promise(r => setTimeout(r, 4000)); // Respect quota 15/min
+    if (statusEl) statusEl.textContent = `✅ ${done}/${questions.length} réponses en cache`;
+  } finally {
+    preCacheRunning = false;
+    if (btn) btn.disabled = false;
   }
-  if (statusEl) statusEl.textContent = `✅ ${done}/${questions.length} réponses en cache`;
 }
 
 function initDemoCacheControls() {
@@ -509,12 +554,17 @@ function applyIdlePose(vrm) {
 // 👁️ Regard naturel et clignement automatique (indépendant de l'état réflexion)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Clignement naturel : toutes les 2-6 secondes, courbe en cloche sur ~150ms.
+function getBlinkIntervalMs() {
+    const rateSec = clamp(Number.parseFloat(localStorage.getItem('emoBlinkRate') || '4') || 4, 1, 10);
+    return rateSec * (500 + Math.random() * 1000);
+}
+
+// Clignement naturel : fréquence et intensité pilotées par le panneau (défaut 4s / 0.8).
 // Mis en pause automatiquement quand startThinking() contrôle le blink.
 function startNaturalBlinking() {
     if (!currentVrm) return;
     stopNaturalBlinking();
-    naturalBlinkNext = performance.now() + 2000 + Math.random() * 4000;
+    naturalBlinkNext = performance.now() + getBlinkIntervalMs();
 
     const tick = (now) => {
         if (!currentVrm) {
@@ -540,9 +590,11 @@ function startNaturalBlinking() {
             if (progress >= 1) {
                 setExpression('blink', 0);
                 naturalBlinkStart = 0;
-                naturalBlinkNext = now + 2000 + Math.random() * 4000;
+                naturalBlinkNext = now + getBlinkIntervalMs();
             } else {
-                setExpression('blink', Math.sin(progress * Math.PI));
+                const rawBlink = Number.parseFloat(localStorage.getItem('emoBlink') ?? '0.8');
+                const blinkAmp = clamp(Number.isFinite(rawBlink) ? rawBlink : 0.8, 0, 1);
+                setExpression('blink', Math.sin(progress * Math.PI) * blinkAmp);
             }
         }
 
@@ -574,12 +626,14 @@ function scheduleNextGazeSaccade() {
     if (gazeSaccadeTimeout) clearTimeout(gazeSaccadeTimeout);
     gazeSaccadeTimeout = setTimeout(() => {
         if (!currentVrm) return;
+        const gazeAmp = clamp(Number.parseFloat(localStorage.getItem('emoGaze') ?? '0.03') || 0, 0, 0.1);
+        const span = gazeAmp * 2.66;
         gazeSaccadeStart = performance.now();
         const startOffset = gazeOffset.clone();
         const endOffset = new THREE.Vector3(
-            (Math.random() - 0.5) * 0.08,
-            (Math.random() - 0.5) * 0.08,
-            (Math.random() - 0.5) * 0.08
+            (Math.random() - 0.5) * span,
+            (Math.random() - 0.5) * span,
+            (Math.random() - 0.5) * span
         );
 
         const tick = (now) => {
@@ -1125,10 +1179,23 @@ const SARRA_ACTION_TOOLS = [{
 const ACTION_SYSTEM_RULE = "RÈGLE ABSOLUE : Si l'utilisateur demande une action (ouvrir un site, lancer une recherche), tu DOIS UNIQUEMENT émettre un functionCall vers l'outil correspondant. Tu ne dois JAMAIS répondre par du texte pour dire que tu vas le faire. Si tu émets du texte descriptif au lieu d'un functionCall, c'est une erreur de ta part. Après l'appel de l'outil, réponds en une phrase courte confirmant l'exécution.";
 
 async function callGeminiDirect(model, key, message, signal, imagePart = null) {
-    const provider = localStorage.getItem('reasoningProvider') || 'gemini';
-    const directives = (localStorage.getItem('coreDirectives')?.trim()
-        || 'Réponds en français, avec un ton naturel et concis.')
+    const provider = document.getElementById('cfg-reasoning-provider')?.value
+        || localStorage.getItem('reasoningProvider')
+        || 'gemini';
+    const avatarName = localStorage.getItem('avatarName')?.trim();
+    const userName = localStorage.getItem('userName')?.trim();
+    const identityLine = avatarName || userName
+        ? `Identité : ${avatarName ? `tu t'appelles ${avatarName}` : ''}${avatarName && userName ? ', ' : ''}${userName ? `et l'utilisateur s'appelle ${userName}` : ''}. `
+        : '';
+    const memoryItems = getMemoryContext();
+    const memoryBlock = memoryItems.length
+        ? `\nMémoire des derniers échanges :\n${memoryItems.map((m) => `- ${m}`).join('\n')}`
+        : '';
+    const directives = identityLine
+        + (localStorage.getItem('coreDirectives')?.trim()
+            || 'Réponds en français, avec un ton naturel et concis.')
         + ' Réponds en 2 phrases courtes maximum à l’oral, sans introduction ni conclusion.'
+        + memoryBlock
         + ACTION_SYSTEM_RULE;
 
     // Groq (llama-3.3) ne voit pas les images : avec une capture, on reste sur
@@ -1141,7 +1208,8 @@ async function callGeminiDirect(model, key, message, signal, imagePart = null) {
         const url = isGroq
             ? 'https://api.groq.com/openai/v1/chat/completions'
             : 'https://openrouter.ai/api/v1/chat/completions';
-        const providerKey = (isGroq ? localStorage.getItem('groqKey') : localStorage.getItem('openRouterKey')) || key;
+        const openRouterKey = localStorage.getItem('openRouterKey') || localStorage.getItem('openrouterKey');
+        const providerKey = (isGroq ? localStorage.getItem('groqKey') : openRouterKey) || key;
         const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${providerKey}` };
         if (!isGroq) {
             headers['HTTP-Referer'] = 'https://sarra-final.local';
@@ -1251,7 +1319,7 @@ function resolveDemoApiKey() {
     const configured = GEMINI_API_KEY_DEMO && GEMINI_API_KEY_DEMO !== "TA_CLE_API_ICI"
         ? GEMINI_API_KEY_DEMO
         : '';
-    const key = configured || localStorage.getItem('apiKey') || '';
+    const key = configured || localStorage.getItem('apiKey') || localStorage.getItem('geminiKey') || '';
     if (!key) {
         console.error("❌ Clé API démo manquante : remplace GEMINI_API_KEY_DEMO ou saisis la clé dans le panneau.");
     }
@@ -1287,6 +1355,11 @@ window.__sarra.showToast = showToast;
 
 function pickBestFrenchVoice() {
     const voices = window.speechSynthesis.getVoices();
+    const preferredName = localStorage.getItem('selectedVoice');
+    if (preferredName) {
+        const matched = voices.find((v) => v.name === preferredName);
+        if (matched) return matched;
+    }
     const fr = (v) => (v.lang || '').toLowerCase().startsWith('fr');
     return voices.find((v) => v.name.includes('Julie'))
         || voices.find((v) => v.name.includes('Hortense'))
@@ -1298,13 +1371,14 @@ function pickBestFrenchVoice() {
 }
 
 function getTtsProvider() {
-    return document.querySelector('#tab-voice .provider-card[data-provider].active')?.dataset.provider
+    return document.getElementById('cfg-tts-provider')?.value
         || localStorage.getItem('ttsProvider')
         || 'gemini-tts';
 }
 
 function getElevenLabsKey() {
     return document.getElementById('cfg-elevenlabs-key')?.value.trim()
+        || localStorage.getItem('elevenlabsKey')
         || localStorage.getItem('ttsKey')
         || '';
 }
@@ -1440,6 +1514,7 @@ function pcm16ToWav(base64, sampleRate = 24000) {
 
 function getGeminiVoice() {
     return document.getElementById('cfg-gemini-tts-voice')?.value
+        || localStorage.getItem('geminiTTSVoice')
         || localStorage.getItem('geminiVoice')
         || 'Kore';
 }
@@ -1450,6 +1525,7 @@ async function speakWithGemini(text, options = {}) {
     const voiceName = options.voiceName || getGeminiVoice();
     const model = options.model || GEMINI_TTS_MODEL;
     localStorage.setItem('geminiVoice', voiceName);
+    localStorage.setItem('geminiTTSVoice', voiceName);
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
     const controller = new AbortController();
@@ -2110,20 +2186,25 @@ let avatarMemory = (() => {
 })();
 
 function addMemory(userText, replyText) {
-    const entry = `Utilisateur: "${String(userText).slice(0, 60)}" → Sarra: "${String(replyText).slice(0, 60)}"`;
+    if (localStorage.getItem('memoryEnabled') === 'false') return;
+    const avatarLabel = localStorage.getItem('avatarName')?.trim() || 'Sarra';
+    const entry = `Utilisateur: "${String(userText).slice(0, 60)}" → ${avatarLabel}: "${String(replyText).slice(0, 60)}"`;
     avatarMemory.push(entry);
-    const maxMemory = Math.max(0, Math.min(50, Number.parseInt(localStorage.getItem('memorySize') || '10', 10) || 0));
+    const parsedMax = Number.parseInt(localStorage.getItem('memorySize') || '10', 10);
+    const maxMemory = Math.max(0, Math.min(10, Number.isFinite(parsedMax) ? parsedMax : 10));
     avatarMemory = maxMemory ? avatarMemory.slice(-maxMemory) : [];
     localStorage.setItem('avatarMemory', JSON.stringify(avatarMemory));
     updateMemoryPreview();
 }
 
 function getMemoryContext() {
+    if (localStorage.getItem('memoryEnabled') === 'false') return [];
     return avatarMemory.slice();
 }
 
 // ---------- Onboarding : premier démarrage ----------
 function isConfigured() {
+    if (localStorage.getItem('onboardingSkipped') === 'true') return true;
     return !!localStorage.getItem('apiKey')
         && !!localStorage.getItem('userName')
         && !!localStorage.getItem('avatarName');
@@ -2140,38 +2221,63 @@ function hideOnboarding() {
 }
 
 function saveOnboarding() {
-    const apiKey = document.getElementById('apiKey').value.trim();
-    const userName = document.getElementById('userName').value.trim();
-    const avatarName = document.getElementById('avatarName').value.trim();
-    if (!apiKey || !userName || !avatarName) {
-        alert("Veuillez remplir les trois champs.");
+    const apiKey = document.getElementById('apiKey')?.value.trim() || '';
+    const userName = document.getElementById('userName')?.value.trim() || '';
+    const avatarName = document.getElementById('avatarName')?.value.trim() || 'Sarra';
+    const obStatus = document.getElementById('ob-status');
+    if (!apiKey || !userName) {
+        if (obStatus) {
+            obStatus.textContent = 'Renseignez votre prénom et votre clé API (ou cliquez sur « Plus tard »).';
+        }
         return;
     }
+    if (obStatus) obStatus.textContent = '';
     localStorage.setItem('apiKey', apiKey);
+    if (!localStorage.getItem('geminiKey')) localStorage.setItem('geminiKey', apiKey);
+    if (!localStorage.getItem('geminiTTSKey')) localStorage.setItem('geminiTTSKey', apiKey);
     localStorage.setItem('userName', userName);
     localStorage.setItem('avatarName', avatarName);
+    localStorage.removeItem('onboardingSkipped');
     hideOnboarding();
-    // Rendre la scène 3D visible
+    const sceneDiv = document.getElementById('scene');
+    if (sceneDiv) sceneDiv.style.display = 'block';
+}
+
+function skipOnboarding() {
+    const userName = document.getElementById('userName')?.value.trim() || '';
+    const avatarName = document.getElementById('avatarName')?.value.trim() || 'Sarra';
+    if (userName) localStorage.setItem('userName', userName);
+    if (avatarName) localStorage.setItem('avatarName', avatarName);
+    localStorage.setItem('onboardingSkipped', 'true');
+    hideOnboarding();
     const sceneDiv = document.getElementById('scene');
     if (sceneDiv) sceneDiv.style.display = 'block';
 }
 
 // ---------- Panneau de configuration (toggle via Ctrl+Shift+K / IPC) ----------
-function toggleConfigPanel() {
+function toggleConfigPanel(forceOpen) {
     const panel = document.getElementById('config-panel');
     if (!panel) return;
-    const show = panel.style.display !== 'block';
-    panel.style.display = show ? 'block' : 'none';
-    if (show) loadConfigValuesV2();
+    const isCurrentlyOpen = panel.classList.contains('is-open') || getComputedStyle(panel).display !== 'none';
+    const show = typeof forceOpen === 'boolean' ? forceOpen : !isCurrentlyOpen;
+    panel.style.display = '';
+    panel.classList.toggle('is-open', show);
+    if (show) {
+        loadConfigValuesV2();
+        applySavedPanelState();
+        populateVoiceList();
+        updateMemoryPreview();
+        updateAvatarBoundsInfo();
+    }
 }
 
 // ============================================================================
-// PANNEAU PROFESSIONNEL v2 — configuration, presets et tests providers
+// PANNEAU PROFESSIONNEL v2 — presets, fallback et persistance position avatar
 // ============================================================================
 const DIRECTIVE_PRESETS = Object.freeze({
     friendly: "Tu es Sarra, une assistante bienveillante. Tu parles français avec un ton chaleureux, simple et naturel. Tu tutoiens ton interlocuteur et restes concise à l'oral.",
     professional: "Tu es Sarra, assistante stratégique senior. Français exclusif, ton calme et direct. Un fait concret vaut mieux qu'un adjectif. Maximum deux phrases à l'oral.",
-    pedagogical: "Tu es Sarra, tutrice pédagogique. Français clair, explications courtes et concrètes, une seule idée par phrase. Tu verifies la compréhension avec une question brève.",
+    pedagogical: "Tu es Sarra, tutrice pédagogique. Français clair, explications courtes et concrètes, une seule idée par phrase. Tu vérifies la compréhension avec une question brève.",
     humorous: "Tu es Sarra, assistante décontractée et humoristique. Français naturel, ton léger et bienveillant, sans jamais détourner la réponse de la question posée."
 });
 
@@ -2181,190 +2287,11 @@ function applyFallbackSetting() {
     if (enabled) GEMINI_FALLBACK_MODELS_DEMO.push(...GEMINI_MODEL_ORDER.slice(1));
 }
 
-function setIndicator(id, text, ok = true) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = text;
-    el.classList.toggle('ok', ok);
-    el.classList.toggle('error', !ok);
-}
-
-function syncSliderValue(id, suffix = '') {
-    const input = document.getElementById(id);
-    const output = document.getElementById(`val-${id.replace('cfg-', '')}`);
-    if (!input || !output) return;
-    const value = Number(input.value);
-    output.textContent = Number.isInteger(value) && suffix === 's' ? `${value}s` : value.toFixed(id.includes('blink') ? 0 : 2);
-}
-
-function markActiveCard(scope, provider) {
-    document.querySelectorAll(`${scope} .provider-card[data-provider]`).forEach((card) => {
-        card.classList.toggle('active', card.dataset.provider === provider);
-    });
-}
-
-function initConfigPanel() {
-    document.querySelectorAll('.tab-btn').forEach((button) => {
-        button.addEventListener('click', () => {
-            document.querySelectorAll('.tab-btn').forEach((tab) => tab.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach((content) => content.classList.remove('active'));
-            button.classList.add('active');
-            document.getElementById(`tab-${button.dataset.tab}`)?.classList.add('active');
-        });
-    });
-
-    document.getElementById('cfg-close')?.addEventListener('click', () => {
-        document.getElementById('config-panel').style.display = 'none';
-    });
-
-    // Sélection des providers (carats IA / voix).
-    const bindCards = (scope, key) => {
-        document.querySelectorAll(`${scope} .provider-card[data-provider]`).forEach((card) => {
-            card.addEventListener('click', (event) => {
-                if (event.target.closest('a, button, input, select')) return;
-                markActiveCard(scope, card.dataset.provider);
-                localStorage.setItem(key, card.dataset.provider);
-            });
-        });
-    };
-    bindCards('#tab-ia', 'reasoningProvider');
-    bindCards('#tab-voice', 'ttsProvider');
-
-    loadConfigValues();
-    populateVoiceList();
-    if ('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = populateVoiceList;
-
-    document.querySelectorAll('[data-test]').forEach((button) => {
-        button.addEventListener('click', () => runProviderTest(button.dataset.test));
-    });
-
-    document.getElementById('btn-clear-memory')?.addEventListener('click', clearMemory);
-    document.getElementById('btn-view-memory')?.addEventListener('click', () => {
-        const box = document.getElementById('memory-preview');
-        if (box) box.style.maxHeight = box.style.maxHeight === '360px' ? '150px' : '360px';
-    });
-    document.getElementById('btn-reset-all')?.addEventListener('click', factoryReset);
-    document.getElementById('btn-factory-reset')?.addEventListener('click', factoryReset);
-    document.getElementById('cfg-save')?.addEventListener('click', saveAllConfig);
-
-    document.getElementById('cfg-auto-fallback')?.addEventListener('change', applyFallbackSetting);
-
-    // Sliders : effet immédiat au runtime.
-    const liveSettings = {
-        'cfg-lip-sensitivity': 'lipSensitivity', 'cfg-lip-speed': 'lipSpeed',
-        'cfg-lip-jaw': 'lipJaw', 'cfg-lip-smoothing': 'lipSmoothing',
-        'cfg-lip-threshold': 'lipThreshold', 'cfg-emo-blink': 'emoBlink',
-        'cfg-emo-blink-rate': 'emoBlinkRate', 'cfg-emo-neck': 'emoNeck',
-        'cfg-emo-breath': 'emoBreath', 'cfg-emo-gaze': 'emoGaze',
-        'cfg-emo-brow': 'emoAngry', 'cfg-memory-size': 'memorySize'
-    };
-    Object.entries(liveSettings).forEach(([id, key]) => {
-        const input = document.getElementById(id);
-        if (!input) return;
-        input.addEventListener('input', (event) => {
-            localStorage.setItem(key, event.currentTarget.value);
-            syncSliderValue(id, id.includes('blink-rate') ? 's' : '');
-            if (key === 'memorySize') {
-                const limit = Math.max(0, Math.min(50, Number.parseInt(event.currentTarget.value, 10) || 0));
-                avatarMemory = limit ? avatarMemory.slice(-limit) : [];
-                localStorage.setItem('avatarMemory', JSON.stringify(avatarMemory));
-                updateMemoryPreview();
-            }
-        });
-    });
-    Object.keys(liveSettings).forEach((id) => syncSliderValue(id));
-
-    // Directives : compteur + presets.
-    const directives = document.getElementById('cfg-core-directives');
-    const updateCount = () => {
-        const count = document.getElementById('directive-count');
-        if (count && directives) count.textContent = String(directives.value.length);
-    };
-    directives?.addEventListener('input', () => {
-        localStorage.setItem('coreDirectives', directives.value);
-        updateCount();
-    });
-    document.querySelectorAll('.btn-preset').forEach((button) => {
-        button.addEventListener('click', () => {
-            const text = DIRECTIVE_PRESETS[button.dataset.preset];
-            if (!text || !directives) return;
-            directives.value = text;
-            localStorage.setItem('coreDirectives', text);
-            updateCount();
-        });
-    });
-
-    document.getElementById('btn-test-lipsync')?.addEventListener('click', () => {
-        speakWithBestVoice('Bonjour, je suis Sarra');
-    });
-    document.getElementById('btn-auto-calibrate')?.addEventListener('click', async () => {
-        const status = document.getElementById('calibration-status');
-        if (status) status.textContent = '🎯 Calibration en cours...';
-        document.getElementById('cfg-lip-sensitivity').value = '1';
-        document.getElementById('cfg-lip-speed').value = '1';
-        document.getElementById('cfg-lip-jaw').value = '1';
-        localStorage.setItem('lipSensitivity', '1');
-        localStorage.setItem('lipSpeed', '1');
-        localStorage.setItem('lipJaw', '1');
-        Object.keys(liveSettings).forEach((id) => syncSliderValue(id));
-        await speakWithBestVoice('Bonjour, je suis Sarra');
-        if (status) status.textContent = '✅ Calibration terminée — paramètres optimisés';
-    });
-    updateCount();
-}
-
-function loadConfigValues() {
-    const get = (id, key, fallback = '') => {
-        const element = document.getElementById(id);
-        if (element) element.value = localStorage.getItem(key) ?? fallback;
-    };
-    get('cfg-gemini-key', 'apiKey');
-    get('cfg-groq-key', 'groqKey', '');
-    get('cfg-openrouter-key', 'openRouterKey', '');
-    get('cfg-elevenlabs-key', 'ttsKey', '');
-    get('cfg-gemini-tts-key', 'geminiTtsKey', '');
-    get('cfg-browser-voice', 'selectedVoice', '');
-    get('cfg-elevenlabs-voice', 'elevenVoiceId', 'Rachel');
-    get('cfg-gemini-tts-voice', 'geminiVoice', 'Kore');
-    get('cfg-core-directives', 'coreDirectives', DIRECTIVE_PRESETS.friendly);
-    get('cfg-lip-sensitivity', 'lipSensitivity', '1');
-    get('cfg-lip-speed', 'lipSpeed', '1');
-    get('cfg-lip-jaw', 'lipJaw', '1');
-    get('cfg-lip-smoothing', 'lipSmoothing', '0.1');
-    get('cfg-lip-threshold', 'lipThreshold', '0.05');
-    get('cfg-emo-blink', 'emoBlink', '0.8');
-    get('cfg-emo-blink-rate', 'emoBlinkRate', '4');
-    get('cfg-emo-neck', 'emoNeck', '0.08');
-    get('cfg-emo-breath', 'emoBreath', '0.015');
-    get('cfg-emo-gaze', 'emoGaze', '0.03');
-    get('cfg-emo-brow', 'emoAngry', '0.1');
-    get('cfg-memory-size', 'memorySize', '10');
-
-    const teeth = document.getElementById('cfg-lip-teeth');
-    if (teeth) teeth.checked = localStorage.getItem('lipTeeth') !== 'false';
-    const fallbackToggle = document.getElementById('cfg-auto-fallback');
-    if (fallbackToggle) fallbackToggle.checked = localStorage.getItem('autoFallback') !== 'false';
-    applyFallbackSetting();
-
-    markActiveCard('#tab-ia', localStorage.getItem('reasoningProvider') || 'gemini');
-    markActiveCard('#tab-voice', localStorage.getItem('ttsProvider') || 'gemini-tts');
-
-    Object.keys({
-        'cfg-lip-sensitivity': 1, 'cfg-lip-speed': 1, 'cfg-lip-jaw': 1,
-        'cfg-lip-smoothing': 1, 'cfg-lip-threshold': 1, 'cfg-emo-blink': 1,
-        'cfg-emo-blink-rate': 1, 'cfg-emo-neck': 1, 'cfg-emo-breath': 1,
-        'cfg-emo-gaze': 1, 'cfg-emo-brow': 1
-    }).forEach((id) => syncSliderValue(id, id.includes('blink-rate') ? 's' : ''));
-
-    const count = document.getElementById('directive-count');
-    const directives = document.getElementById('cfg-core-directives');
-    if (count && directives) count.textContent = String(directives.value.length);
-
-    applySavedPosition();
-    updateMemoryPreview();
-}
-
 function applySavedPosition() {
+    if (localStorage.getItem('sarra_window_state')) {
+        restoreAvatarState();
+        return;
+    }
     const container = document.getElementById('avatar-container');
     if (!container) return;
     const width = clamp(Number(localStorage.getItem('avatarWidth')) || 400, 200, 1920);
@@ -2377,133 +2304,6 @@ function applySavedPosition() {
     container.style.height = `${height}px`;
     container.style.left = `${Number.isFinite(x) ? x : 100}px`;
     container.style.top = `${Number.isFinite(y) ? y : 100}px`;
-}
-
-async function runProviderTest(type) {
-    const statusId = {
-        gemini: 'status-gemini', groq: 'status-groq', openrouter: 'status-openrouter',
-        elevenlabs: 'status-elevenlabs', 'gemini-tts': 'status-gemini-tts'
-    }[type];
-    const fail = (message) => { if (statusId) setIndicator(statusId, `❌ ${message}`, false); };
-    const ok = (message) => { if (statusId) setIndicator(statusId, `✅ ${message}`, true); };
-
-    try {
-        if (type === 'gemini') {
-            const key = document.getElementById('cfg-gemini-key')?.value.trim() || resolveDemoApiKey();
-            if (!key) return fail('Clé Gemini manquante');
-            const reply = (await callGeminiDirect(GEMINI_MODEL_DEMO, key, 'Dis "OK" en un mot.', undefined))?.text || '';
-            return ok(reply ? 'Clé valide' : 'Réponse vide');
-        }
-
-        if (type === 'groq' || type === 'openrouter') {
-            const inputId = type === 'groq' ? 'cfg-groq-key' : 'cfg-openrouter-key';
-            const key = document.getElementById(inputId)?.value.trim();
-            if (!key) return fail('Clé manquante');
-            const url = type === 'groq'
-                ? 'https://api.groq.com/openai/v1/chat/completions'
-                : 'https://openrouter.ai/api/v1/chat/completions';
-            const model = type === 'groq'
-                ? 'llama-3.3-70b-versatile'
-                : 'meta-llama/llama-3.3-70b-instruct:free';
-            const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` };
-            if (type === 'openrouter') {
-                headers['HTTP-Referer'] = location.origin;
-                headers['X-Title'] = 'Sarra Studio';
-            }
-            const response = await fetch(url, {
-                method: 'POST', headers,
-                body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Dis "OK" en un mot.' }] }),
-                signal: AbortSignal.timeout(10000)
-            });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) return fail(`HTTP ${response.status}`);
-            return ok(data?.choices?.[0]?.message?.content ? 'Clé valide' : 'Réponse vide');
-        }
-
-        if (type === 'browser-voice') {
-            await speakWithBrowserVoice('Bonjour, je suis Sarra.');
-            return;
-        }
-
-        if (type === 'elevenlabs') {
-            const key = getElevenLabsKey();
-            if (!key) return fail('Clé ElevenLabs manquante');
-            const voices = await fetchElevenLabsVoices(key);
-            if (!voices.length) return fail('Aucune voix disponible');
-            const selected = document.getElementById('cfg-elevenlabs-voice')?.value || voices[0].name;
-            const voice = voices.find((v) => v.name?.toLowerCase() === selected.toLowerCase()) || voices[0];
-            localStorage.setItem('elevenVoiceId', voice.voice_id);
-            ok(`${voices.length} voix — "${voice.name}"`);
-            await speakWithBestVoice('Bonjour, je suis Sarra.');
-            return;
-        }
-
-        if (type === 'gemini-tts') {
-            const key = document.getElementById('cfg-gemini-tts-key')?.value.trim() || resolveDemoApiKey();
-            if (!key) return fail('Clé Gemini manquante');
-            localStorage.setItem('geminiTtsKey', key);
-            await speakWithGemini('Bonjour, je suis Sarra.');
-            return ok(`Voix "${getGeminiVoice()}"`);
-        }
-    } catch (error) {
-        fail(error?.message || 'Échec du test');
-    }
-}
-
-function clearMemory() {
-    localStorage.removeItem('avatarMemory');
-    avatarMemory = [];
-    updateMemoryPreview();
-}
-
-function resetAvatarPosition() {
-    localStorage.removeItem('sarra_window_state');
-    ['avatarWidth', 'avatarHeight', 'avatarPosX', 'avatarPosY'].forEach((key) => localStorage.removeItem(key));
-    applySavedPosition();
-    loadConfigValues();
-}
-
-function saveAllConfig() {
-    const values = [
-        ['cfg-gemini-key', 'apiKey'], ['cfg-groq-key', 'groqKey'],
-        ['cfg-openrouter-key', 'openRouterKey'], ['cfg-elevenlabs-key', 'ttsKey'],
-        ['cfg-gemini-tts-key', 'geminiTtsKey'], ['cfg-browser-voice', 'selectedVoice'],
-        ['cfg-elevenlabs-voice', 'elevenVoiceId'], ['cfg-gemini-tts-voice', 'geminiVoice'],
-        ['cfg-core-directives', 'coreDirectives'],
-        ['cfg-lip-sensitivity', 'lipSensitivity'], ['cfg-lip-speed', 'lipSpeed'],
-        ['cfg-lip-jaw', 'lipJaw'], ['cfg-lip-smoothing', 'lipSmoothing'],
-        ['cfg-lip-threshold', 'lipThreshold'], ['cfg-emo-blink', 'emoBlink'],
-        ['cfg-emo-blink-rate', 'emoBlinkRate'], ['cfg-emo-neck', 'emoNeck'],
-        ['cfg-emo-breath', 'emoBreath'], ['cfg-emo-gaze', 'emoGaze'],
-        ['cfg-emo-brow', 'emoAngry'], ['cfg-memory-size', 'memorySize']
-    ];
-    values.forEach(([id, key]) => {
-        const element = document.getElementById(id);
-        if (element) localStorage.setItem(key, element.value);
-    });
-
-    localStorage.setItem('reasoningProvider',
-        document.querySelector('#tab-ia .provider-card[data-provider].active')?.dataset.provider || 'gemini');
-    localStorage.setItem('ttsProvider', getTtsProvider());
-    localStorage.setItem('autoFallback',
-        String(document.getElementById('cfg-auto-fallback')?.checked ?? true));
-    applyFallbackSetting();
-
-    const teeth = document.getElementById('cfg-lip-teeth');
-    if (teeth) localStorage.setItem('lipTeeth', String(teeth.checked));
-    saveAvatarState();
-
-    const maxMemory = Math.max(0, Math.min(50, Number.parseInt(localStorage.getItem('memorySize') || '10', 10) || 0));
-    avatarMemory = maxMemory ? avatarMemory.slice(-maxMemory) : [];
-    localStorage.setItem('avatarMemory', JSON.stringify(avatarMemory));
-    updateMemoryPreview();
-
-    const status = document.getElementById('save-status');
-    if (status) {
-        status.textContent = '✅ Configuration sauvegardée par défaut';
-        status.style.color = '#22c55e';
-        setTimeout(() => { status.textContent = ''; }, 3000);
-    }
 }
 
 // Drag & resize persist handled in initAdvancedInteraction
@@ -2639,6 +2439,17 @@ function initMic() {
 }
 
 // OVERLAY APP: Persistance de l'état de la fenêtre
+function updateAvatarBoundsInfo() {
+  const el = document.getElementById('bounds-info');
+  const container = document.getElementById('avatar-container');
+  if (!el || !container) return;
+  const w = Math.round(container.offsetWidth || Number.parseFloat(container.style.width) || 400);
+  const h = Math.round(container.offsetHeight || Number.parseFloat(container.style.height) || 400);
+  const x = Math.round(container.offsetLeft || Number.parseFloat(container.style.left) || 0);
+  const y = Math.round(container.offsetTop || Number.parseFloat(container.style.top) || 0);
+  el.textContent = `Avatar : ${w} × ${h} px (${x}, ${y})`;
+}
+
 function saveAvatarState() {
   const container = document.getElementById('avatar-container');
   if (!container) return;
@@ -2649,6 +2460,7 @@ function saveAvatarState() {
     h: container.offsetHeight
   };
   localStorage.setItem('sarra_window_state', JSON.stringify(state));
+  updateAvatarBoundsInfo();
 }
 
 function restoreAvatarState() {
@@ -2661,6 +2473,7 @@ function restoreAvatarState() {
     container.style.width = `${state.w}px`;
     container.style.height = `${state.h}px`;
   }
+  updateAvatarBoundsInfo();
 }
 
 // OVERLAY APP: Zonage souris Drag (haut) / Resize (bas)
@@ -2679,7 +2492,7 @@ function initAdvancedInteraction() {
   });
 
   container.addEventListener('mousedown', (e) => {
-    if (e.target.closest('#mic-btn')) return; // Ignore si clic sur le micro
+    if (e.target.closest('#mic-btn, #cfg-open-btn')) return; // Ignore si clic sur micro ou réglages
     const rect = container.getBoundingClientRect();
     const relativeY = e.clientY - rect.top;
 
@@ -2720,6 +2533,289 @@ function initAdvancedInteraction() {
       container.style.cursor = 'grab';
     }
   });
+}
+
+// ---------- État géométrique du panneau (déplacement souris + redimensionnement) ----------
+const PANEL_STATE_KEY = 'sarra_panel_state';
+const PANEL_MIN_WIDTH = 380;
+const PANEL_MIN_HEIGHT = 360;
+const PANEL_DEFAULT_WIDTH = 640;
+const PANEL_DEFAULT_HEIGHT = 760;
+let isPanelInteracting = false;
+
+function readSavedPanelState() {
+    try {
+        const raw = localStorage.getItem(PANEL_STATE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+function savePanelState(panel, extra = {}) {
+    if (!panel) return;
+    const prev = readSavedPanelState() || {};
+    const rect = panel.getBoundingClientRect();
+    const isCollapsed = panel.classList.contains('is-collapsed');
+    const state = {
+        x: Math.round(Number.isFinite(Number.parseFloat(panel.style.left)) ? Number.parseFloat(panel.style.left) : rect.left),
+        y: Math.round(Number.isFinite(Number.parseFloat(panel.style.top)) ? Number.parseFloat(panel.style.top) : rect.top),
+        w: Math.round(Number.isFinite(Number.parseFloat(panel.style.width)) ? Number.parseFloat(panel.style.width) : (prev.w || rect.width || PANEL_DEFAULT_WIDTH)),
+        h: isCollapsed
+            ? (prev.h || PANEL_DEFAULT_HEIGHT)
+            : Math.round(Number.isFinite(Number.parseFloat(panel.style.height)) ? Number.parseFloat(panel.style.height) : (prev.h || rect.height || PANEL_DEFAULT_HEIGHT)),
+        collapsed: isCollapsed,
+        ...extra
+    };
+    localStorage.setItem(PANEL_STATE_KEY, JSON.stringify(state));
+}
+
+function updatePanelSizeHud(panel, width, height) {
+    const hud = document.getElementById('panel-size-hud');
+    if (hud) hud.textContent = `${Math.round(width)} × ${Math.round(height)}`;
+    if (panel) panel.dataset.sizeLabel = `${Math.round(width)}×${Math.round(height)}`;
+}
+
+function clampPanelToViewport() {
+    const panel = document.getElementById('config-panel');
+    if (!panel || !panel.classList.contains('is-open')) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const margin = 8;
+    const rect = panel.getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+
+    const collapsed = panel.classList.contains('is-collapsed');
+    const maxW = Math.max(PANEL_MIN_WIDTH, vw - margin * 2);
+    const maxH = Math.max(PANEL_MIN_HEIGHT, vh - margin * 2);
+    const curW = Number.parseFloat(panel.style.width) || rect.width || PANEL_DEFAULT_WIDTH;
+    const curH = Number.parseFloat(panel.style.height) || rect.height || PANEL_DEFAULT_HEIGHT;
+    const nextW = clamp(curW, Math.min(PANEL_MIN_WIDTH, maxW), maxW);
+
+    if (panel.style.width || rect.width > maxW) panel.style.width = `${Math.round(nextW)}px`;
+
+    if (!collapsed) {
+        const nextH = clamp(curH, Math.min(PANEL_MIN_HEIGHT, maxH), maxH);
+        if (panel.style.height || rect.height > maxH) panel.style.height = `${Math.round(nextH)}px`;
+        updatePanelSizeHud(panel, nextW, nextH);
+    }
+
+    if (panel.style.left !== '' && panel.style.left !== 'auto') {
+        const updatedRect = panel.getBoundingClientRect();
+        const curL = Number.parseFloat(panel.style.left);
+        const curT = Number.parseFloat(panel.style.top);
+        const maxL = Math.max(margin, vw - updatedRect.width - margin);
+        const maxT = Math.max(margin, vh - updatedRect.height - margin);
+        panel.style.left = `${Math.round(clamp(Number.isFinite(curL) ? curL : updatedRect.left, margin, maxL))}px`;
+        panel.style.top = `${Math.round(clamp(Number.isFinite(curT) ? curT : updatedRect.top, margin, maxT))}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+    }
+}
+
+function applySavedPanelState() {
+    const panel = document.getElementById('config-panel');
+    if (!panel) return;
+    const saved = readSavedPanelState();
+    if (!saved) {
+        panel.classList.remove('is-collapsed');
+        panel.style.left = '';
+        panel.style.top = '';
+        panel.style.right = '';
+        panel.style.bottom = '';
+        panel.style.width = '';
+        panel.style.height = '';
+        const r = panel.getBoundingClientRect();
+        updatePanelSizeHud(panel, r.width || PANEL_DEFAULT_WIDTH, r.height || PANEL_DEFAULT_HEIGHT);
+        clampPanelToViewport();
+        return;
+    }
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const margin = 8;
+    const maxW = Math.max(PANEL_MIN_WIDTH, vw - margin * 2);
+    const maxH = Math.max(PANEL_MIN_HEIGHT, vh - margin * 2);
+    const w = clamp(Number(saved.w) || PANEL_DEFAULT_WIDTH, Math.min(PANEL_MIN_WIDTH, maxW), maxW);
+    const h = clamp(Number(saved.h) || PANEL_DEFAULT_HEIGHT, Math.min(PANEL_MIN_HEIGHT, maxH), maxH);
+    const collapsed = Boolean(saved.collapsed);
+
+    panel.style.width = `${Math.round(w)}px`;
+    panel.style.height = `${Math.round(h)}px`;
+    panel.classList.toggle('is-collapsed', collapsed);
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+
+    const effectiveH = collapsed ? 54 : h;
+    const maxL = Math.max(margin, vw - w - margin);
+    const maxT = Math.max(margin, vh - effectiveH - margin);
+    const x = clamp(Number.isFinite(Number(saved.x)) ? Number(saved.x) : (vw - w - 24), margin, maxL);
+    const y = clamp(Number.isFinite(Number(saved.y)) ? Number(saved.y) : 24, margin, maxT);
+    panel.style.left = `${Math.round(x)}px`;
+    panel.style.top = `${Math.round(y)}px`;
+    updatePanelSizeHud(panel, w, h);
+}
+
+function resetPanelLayout() {
+    const panel = document.getElementById('config-panel');
+    if (!panel) return;
+    localStorage.removeItem(PANEL_STATE_KEY);
+    panel.classList.remove('is-collapsed');
+    panel.style.left = '';
+    panel.style.top = '';
+    panel.style.right = '';
+    panel.style.bottom = '';
+    panel.style.width = '';
+    panel.style.height = '';
+    const minBtn = document.getElementById('cfg-minimize');
+    if (minBtn) minBtn.textContent = '—';
+    clampPanelToViewport();
+}
+
+function initConfigPanelDragAndResize(setClickThrough) {
+    const panel = document.getElementById('config-panel');
+    if (!panel) return;
+    const header = panel.querySelector('.panel-header-drag');
+    let mode = null; // 'drag' | 'resize'
+    let resizeDir = '';
+    let activePointerId = null;
+    let startX = 0;
+    let startY = 0;
+    let startLeft = 0;
+    let startTop = 0;
+    let startWidth = 0;
+    let startHeight = 0;
+
+    const beginInteraction = (event, nextMode, dir = '') => {
+        const rect = panel.getBoundingClientRect();
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        panel.style.left = `${Math.round(rect.left)}px`;
+        panel.style.top = `${Math.round(rect.top)}px`;
+        if (!panel.classList.contains('is-collapsed')) {
+            panel.style.width = `${Math.round(rect.width)}px`;
+            panel.style.height = `${Math.round(rect.height)}px`;
+        }
+        mode = nextMode;
+        resizeDir = dir;
+        activePointerId = event.pointerId;
+        startX = event.clientX;
+        startY = event.clientY;
+        startLeft = rect.left;
+        startTop = rect.top;
+        startWidth = rect.width;
+        startHeight = rect.height;
+        isPanelInteracting = true;
+        setClickThrough?.(false);
+        panel.classList.toggle('is-dragging', nextMode === 'drag');
+        panel.classList.toggle('is-resizing', nextMode === 'resize');
+        if (nextMode === 'resize') updatePanelSizeHud(panel, startWidth, startHeight);
+        try { event.target?.setPointerCapture?.(event.pointerId); } catch { /* noop */ }
+        event.preventDefault();
+    };
+
+    header?.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 && event.pointerType === 'mouse') return;
+        if (event.target.closest('button, a, input, select, .no-drag')) return;
+        beginInteraction(event, 'drag');
+    });
+
+    header?.addEventListener('dblclick', (event) => {
+        if (event.target.closest('button, a, input, select, .no-drag')) return;
+        togglePanelCollapse();
+    });
+
+    panel.querySelectorAll('.panel-resize-handle, .panel-resize-edge').forEach((handle) => {
+        handle.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0 && event.pointerType === 'mouse') return;
+            if (panel.classList.contains('is-collapsed')) return;
+            beginInteraction(event, 'resize', handle.dataset.resize || 'se');
+        });
+    });
+
+    window.addEventListener('pointermove', (event) => {
+        if (!mode || (activePointerId !== null && event.pointerId !== activePointerId)) return;
+        const margin = 8;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const dx = event.clientX - startX;
+        const dy = event.clientY - startY;
+
+        if (mode === 'drag') {
+            const maxL = Math.max(margin, vw - startWidth - margin);
+            const maxT = Math.max(margin, vh - startHeight - margin);
+            const nextL = clamp(startLeft + dx, margin, maxL);
+            const nextT = clamp(startTop + dy, margin, maxT);
+            panel.style.left = `${Math.round(nextL)}px`;
+            panel.style.top = `${Math.round(nextT)}px`;
+            return;
+        }
+
+        if (mode === 'resize') {
+            const minW = Math.min(PANEL_MIN_WIDTH, vw - margin * 2);
+            const minH = Math.min(PANEL_MIN_HEIGHT, vh - margin * 2);
+            let nextL = startLeft;
+            let nextW = startWidth;
+            let nextH = startHeight;
+
+            if (resizeDir.includes('e')) {
+                const maxW = Math.max(minW, vw - startLeft - margin);
+                nextW = clamp(startWidth + dx, minW, maxW);
+            }
+            if (resizeDir.includes('w')) {
+                const maxW = Math.max(minW, startLeft + startWidth - margin);
+                nextW = clamp(startWidth - dx, minW, maxW);
+                nextL = startLeft + (startWidth - nextW);
+            }
+            if (resizeDir.includes('s')) {
+                const maxH = Math.max(minH, vh - startTop - margin);
+                nextH = clamp(startHeight + dy, minH, maxH);
+            }
+
+            panel.style.left = `${Math.round(nextL)}px`;
+            panel.style.width = `${Math.round(nextW)}px`;
+            panel.style.height = `${Math.round(nextH)}px`;
+            updatePanelSizeHud(panel, nextW, nextH);
+        }
+    });
+
+    const endInteraction = (event) => {
+        if (!mode || (event && activePointerId !== null && event.pointerId !== activePointerId)) return;
+        panel.classList.remove('is-dragging', 'is-resizing');
+        savePanelState(panel);
+        mode = null;
+        resizeDir = '';
+        activePointerId = null;
+        isPanelInteracting = false;
+    };
+
+    window.addEventListener('pointerup', endInteraction);
+    window.addEventListener('pointercancel', endInteraction);
+    window.addEventListener('resize', clampPanelToViewport);
+}
+
+function togglePanelCollapse() {
+    const panel = document.getElementById('config-panel');
+    if (!panel) return;
+    const willCollapse = !panel.classList.contains('is-collapsed');
+    if (willCollapse) {
+        // Mémoriser la hauteur étendue avant de replier.
+        const rect = panel.getBoundingClientRect();
+        if (!panel.style.height && rect.height > 80) {
+            panel.style.height = `${Math.round(rect.height)}px`;
+        }
+        savePanelState(panel, { collapsed: true });
+        panel.classList.add('is-collapsed');
+    } else {
+        panel.classList.remove('is-collapsed');
+        const saved = readSavedPanelState();
+        if (saved?.h) panel.style.height = `${Math.round(saved.h)}px`;
+        clampPanelToViewport();
+        savePanelState(panel, { collapsed: false });
+    }
+    const minBtn = document.getElementById('cfg-minimize');
+    if (minBtn) minBtn.textContent = willCollapse ? '+' : '—';
 }
 
 // ---------- Initialisation overlay ----------
@@ -2763,6 +2859,7 @@ function initOverlay() {
     // Liaison des boutons.
     const btnSaveOnboard = document.getElementById('btn-save-onboard');
     if (btnSaveOnboard) btnSaveOnboard.addEventListener('click', saveOnboarding);
+    document.getElementById('btn-skip-onboarding')?.addEventListener('click', skipOnboarding);
 
     // Lien externe : création de la clé API Gemini (Google AI Studio).
     const btnCreateKey = document.getElementById('btn-create-gemini-key');
@@ -2770,7 +2867,7 @@ function initOverlay() {
         btnCreateKey.addEventListener('click', async () => {
             try {
                 const opened = await window.sarraAPI?.openExternal?.('https://aistudio.google.com/app/apikey');
-                if (!opened) console.warn('❌ openExternal: impossible d’ouvrir la page de création de clé.');
+                if (!opened) window.open('https://aistudio.google.com/app/apikey', '_blank', 'noopener,noreferrer');
             } catch (e) { console.warn('❌ openExternal:', e); }
         });
     }
@@ -2780,13 +2877,15 @@ function initOverlay() {
         '#avatar-container',
         '#config-panel',
         '#mic-btn',
+        '#cfg-open-btn',
         '#onboarding-modal'
     ];
     function isOverInteractive(x, y) {
+        if (isPanelInteracting) return true;
         for (const sel of clickThroughZones) {
             const el = document.querySelector(sel);
             if (!el) continue;
-            if (el.style.display === 'none') continue;
+            if (getComputedStyle(el).display === 'none') continue;
             const r = el.getBoundingClientRect();
             if (r.width === 0 && r.height === 0) continue;
             if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
@@ -2798,55 +2897,13 @@ function initOverlay() {
     }
     window.addEventListener('mousemove', (e) => {
         setClickThrough(!isOverInteractive(e.clientX, e.clientY));
-        if (panelDrag) {
-            const deltaX = e.clientX - parseInt(panelDrag.dataset.startX || '0');
-            const deltaY = e.clientY - parseInt(panelDrag.dataset.startY || '0');
-            const x = parseInt(panelDrag.style.left || '0') + deltaX;
-            const y = parseInt(panelDrag.style.top || '0') + deltaY;
-            panelDrag.style.left = `${x}px`;
-            panelDrag.style.top = `${y}px`;
-        }
-        if (isResizing) {
-            const deltaX = e.clientX - panelResizeStartX;
-            const deltaY = e.clientY - panelResizeStartY;
-            const panel = document.getElementById('config-panel');
-            panel.style.width = `${parseInt(panel.style.width || '440') + deltaX}px`;
-            panel.style.height = `${parseInt(panel.style.height || '700') + deltaY}px`;
-        }
     });
     window.addEventListener('mouseleave', () => {
-        setClickThrough(true);
+        if (!isPanelInteracting) setClickThrough(true);
     });
 
-    // Drag & resize du panneau de configuration.
-    let panelDrag = null;
-    let panelResizeStartX = 0;
-    let panelResizeStartY = 0;
-    let isResizing = false;
-    window.addEventListener('mousedown', (e) => {
-        if (e.target.id === 'cfg-close' || e.target.id === 'cfg-minimize') return;
-        const dragZone = e.target.closest('.panel-header-drag');
-        if (dragZone) {
-            panelDrag = dragZone;
-            dragZone.dataset.startX = String(e.clientX);
-            dragZone.dataset.startY = String(e.clientY);
-            dragZone.style.cursor = 'grabbing';
-            e.preventDefault();
-        }
-        if (e.target.closest('.panel-resize-handle')) {
-            panelResizeStartX = e.clientX;
-            panelResizeStartY = e.clientY;
-            isResizing = true;
-            e.preventDefault();
-        }
-    });
-    window.addEventListener('mouseup', () => {
-        if (panelDrag) {
-            panelDrag.style.cursor = 'grab';
-            panelDrag = null;
-        }
-        if (isResizing) isResizing = false;
-    });
+    // Drag & resize du panneau de configuration (souris & tactile, avec persistance).
+    initConfigPanelDragAndResize(setClickThrough);
 
     // OVERLAY APP: initialiser le panneau professionnel v2 et la persistance de position.
     initConfigPanelV2();
@@ -2855,103 +2912,353 @@ function initOverlay() {
     // L'état JSON (MODULE 3) prévaut sur les anciennes clés avatarPos*/avatar*.
     restoreAvatarState();
     initAdvancedInteraction();
+    updateAvatarBoundsInfo();
 
     // MODE DÉMO: aucun health-check backend (appel direct à Gemini).
 }
 
 // ============================================================================
-// OVERLAY APP: Panneau de configuration professionnel v2 (logique complète)
+// OVERLAY APP: Panneau de configuration (style configuration.html + live sync)
 // ============================================================================
-let panelVCardsBound = false;
-function bindPanelVCards() {
-    if (panelVCardsBound) return;
-    panelVCardsBound = true;
-    const bind = (scope, key) => {
-        document.querySelectorAll(`${scope} .provider-card[data-provider]:not([data-provider="vision"])`).forEach((card) => {
-            card.addEventListener('click', (event) => {
-                if (event.target.closest('a, button, input, select')) return;
-                document.querySelectorAll(`${scope} .provider-card[data-provider]:not([data-provider="vision"])`)
-                    .forEach((c) => c.classList.toggle('active', c === card));
-                localStorage.setItem(key, card.dataset.provider);
-            });
-        });
+function markPanelDirty() {
+    const badge = document.getElementById('saved-badge');
+    if (badge) {
+        badge.textContent = 'modifications non enregistrées';
+        badge.classList.add('dirty');
+        badge.classList.remove('saved');
+    }
+}
+
+function markPanelSaved(savedAt = Date.now()) {
+    const badge = document.getElementById('saved-badge');
+    if (badge) {
+        badge.textContent = `enregistré ${new Date(savedAt).toLocaleTimeString('fr-FR')}`;
+        badge.classList.remove('dirty');
+        badge.classList.add('saved');
+    }
+}
+
+function updateKeyBadges() {
+    const setBadge = (id, hasKey, emptyLabel = 'non configurée') => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = hasKey ? 'configurée' : emptyLabel;
+        el.classList.toggle('on', Boolean(hasKey));
     };
-    bind('#tab-ia', 'reasoningProvider');
-    bind('#tab-voice', 'ttsProvider');
-    const ia = localStorage.getItem('reasoningProvider') || 'gemini';
-    const voice = localStorage.getItem('ttsProvider') || 'gemini-tts';
-    document.querySelectorAll('#tab-ia .provider-card[data-provider]:not([data-provider="vision"])')
-        .forEach((c) => c.classList.toggle('active', c.dataset.provider === ia));
-    document.querySelectorAll('#tab-voice .provider-card[data-provider]')
-        .forEach((c) => c.classList.toggle('active', c.dataset.provider === voice));
-    applyFallbackSetting();
+    const geminiKey = document.getElementById('cfg-gemini-key')?.value.trim() || localStorage.getItem('geminiKey') || localStorage.getItem('apiKey') || '';
+    const ttsKey = document.getElementById('cfg-gemini-tts-key')?.value.trim() || localStorage.getItem('geminiTTSKey') || '';
+    const groqKey = document.getElementById('cfg-groq-key')?.value.trim() || localStorage.getItem('groqKey') || '';
+    const orKey = document.getElementById('cfg-openrouter-key')?.value.trim() || localStorage.getItem('openRouterKey') || localStorage.getItem('openrouterKey') || '';
+    const elKey = document.getElementById('cfg-elevenlabs-key')?.value.trim() || localStorage.getItem('elevenlabsKey') || localStorage.getItem('ttsKey') || '';
+
+    setBadge('key-badge-gemini', Boolean(geminiKey));
+    setBadge('key-badge-gemini-tts', Boolean(ttsKey && ttsKey !== geminiKey), 'auto (clé Gemini)');
+    setBadge('key-badge-groq', Boolean(groqKey));
+    setBadge('key-badge-openrouter', Boolean(orKey));
+    setBadge('key-badge-elevenlabs', Boolean(elKey));
+}
+
+function syncAltProvidersVisibility() {
+    const details = document.getElementById('alt-providers-details');
+    if (!details) return;
+    const reasoner = document.getElementById('cfg-reasoning-provider')?.value || localStorage.getItem('reasoningProvider') || 'gemini';
+    const tts = document.getElementById('cfg-tts-provider')?.value || localStorage.getItem('ttsProvider') || 'gemini-tts';
+    if (reasoner !== 'gemini' || tts !== 'gemini-tts') {
+        details.open = true;
+    }
+}
+
+function formatSliderValue(id, rawValue) {
+    const num = Number(rawValue);
+    if (!Number.isFinite(num)) return String(rawValue);
+    if (id === 'cfg-emo-blink-rate') return `${Math.round(num)}s`;
+    if (id === 'cfg-emo-breath') return num.toFixed(3);
+    if (id === 'cfg-lip-smoothing' || id === 'cfg-lip-threshold' || id === 'cfg-emo-neck' || id === 'cfg-emo-gaze' || id === 'cfg-emo-brow') {
+        return num.toFixed(2);
+    }
+    return num.toFixed(1);
+}
+
+function syncActivePresetButtons(currentText) {
+    const trimmed = String(currentText || '').trim();
+    document.querySelectorAll('.btn-preset').forEach((btn) => {
+        const presetText = DIRECTIVE_PRESETS[btn.dataset.preset];
+        btn.classList.toggle('active', Boolean(presetText && presetText.trim() === trimmed));
+    });
+}
+
+let emotionPreviewTimer = 0;
+function previewVrmEmotion(emotionKey, labelText = '') {
+    clearTimeout(emotionPreviewTimer);
+    document.querySelectorAll('#emotion-preview-buttons [data-preview-emotion]').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.previewEmotion === emotionKey);
+    });
+    const presets = ['happy', 'sad', 'angry', 'surprised', 'relaxed'];
+    presets.forEach((p) => setExpression(p, 0));
+    if (emotionKey && emotionKey !== 'neutral') {
+        setExpression(emotionKey, 0.85);
+        emotionPreviewTimer = setTimeout(() => {
+            presets.forEach((p) => setExpression(p, 0));
+        }, 2500);
+    }
+    const status = document.getElementById('emotion-status');
+    if (status) {
+        status.textContent = labelText ? `Aperçu en direct : ${labelText}` : '';
+        status.className = 'status ok';
+    }
+}
+
+function armTwoStepConfirm(button, confirmLabel, onConfirm) {
+    if (!button) return;
+    let timer = 0;
+    button.addEventListener('click', () => {
+        if (button.dataset.confirmArmed === 'true') {
+            clearTimeout(timer);
+            delete button.dataset.confirmArmed;
+            button.classList.remove('confirming');
+            if (button.dataset.origLabel) button.textContent = button.dataset.origLabel;
+            onConfirm();
+            return;
+        }
+        button.dataset.origLabel = button.textContent;
+        button.dataset.confirmArmed = 'true';
+        button.textContent = confirmLabel;
+        button.classList.add('confirming');
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+            delete button.dataset.confirmArmed;
+            button.classList.remove('confirming');
+            if (button.dataset.origLabel) button.textContent = button.dataset.origLabel;
+        }, 3500);
+    });
 }
 
 function initConfigPanelV2() {
-    bindPanelVCards();
     initDemoCacheControls();
 
-    document.querySelectorAll('.tab-btn').forEach(btn => {
+    // Bouton discret d'ouverture sur le conteneur avatar + fermetures du panneau.
+    document.getElementById('cfg-open-btn')?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleConfigPanel();
+    });
+
+    // Ferme uniquement le panneau de configuration (sans fermer l'application Sarra).
+    document.getElementById('cfg-close')?.addEventListener('click', () => toggleConfigPanel(false));
+    document.getElementById('close-footer')?.addEventListener('click', () => toggleConfigPanel(false));
+
+    // Réduit / déplie le panneau en barre compacte.
+    document.getElementById('cfg-minimize')?.addEventListener('click', () => togglePanelCollapse());
+
+    // Recentre et réinitialise la taille du panneau.
+    document.getElementById('cfg-reset-layout')?.addEventListener('click', () => resetPanelLayout());
+    document.getElementById('btn-reset-panel-pos')?.addEventListener('click', () => resetPanelLayout());
+
+    document.getElementById('btn-reset-avatar-pos')?.addEventListener('click', () => {
+        const container = document.getElementById('avatar-container');
+        if (!container) return;
+        const w = 400;
+        const h = 400;
+        const x = Math.max(0, Math.round(window.innerWidth / 2 - w / 2));
+        const y = Math.max(0, Math.round(window.innerHeight / 2 - h / 2));
+        container.style.width = `${w}px`;
+        container.style.height = `${h}px`;
+        container.style.left = `${x}px`;
+        container.style.top = `${y}px`;
+        saveAvatarState();
+    });
+
+    // Liens externes vers les portails API (via preload sécurisé en Electron).
+    document.querySelectorAll('#config-panel .api-link').forEach((link) => {
+        link.addEventListener('click', async (event) => {
+            if (typeof window.sarraAPI?.openExternal !== 'function') return;
+            try {
+                const url = new URL(link.href);
+                const allowedHosts = new Set(['aistudio.google.com', 'console.cloud.google.com', 'console.groq.com', 'openrouter.ai']);
+                if (allowedHosts.has(url.hostname)) {
+                    event.preventDefault();
+                    await window.sarraAPI.openExternal(link.href);
+                }
+            } catch { /* noop */ }
+        });
+    });
+
+    // Boutons œil pour afficher/masquer les clés API.
+    document.querySelectorAll('.btn-eye[data-toggle-secret]').forEach((btn) => {
         btn.addEventListener('click', () => {
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            btn.classList.add('active');
-            const content = document.getElementById(`tab-${btn.dataset.tab}`);
-            if (content) content.classList.add('active');
+            const input = document.getElementById(btn.dataset.toggleSecret);
+            if (!input) return;
+            const reveal = input.type === 'password';
+            input.type = reveal ? 'text' : 'password';
+            btn.textContent = reveal ? '🙈' : '👁️';
         });
     });
 
-    document.getElementById('cfg-close')?.addEventListener('click', async () => {
-        document.getElementById('config-panel').style.display = 'none';
-        // Fermeture de la fenêtre via IPC (overlay frameless : pas de bouton natif).
-        try { await window.sarraAPI?.closeWindow?.(); } catch (e) { /* noop */ }
+    // Identité (avatar & utilisateur)
+    document.getElementById('cfg-avatar-name')?.addEventListener('input', (e) => {
+        localStorage.setItem('avatarName', e.target.value.trim() || 'Sarra');
+        markPanelDirty();
+    });
+    document.getElementById('cfg-user-name')?.addEventListener('input', (e) => {
+        localStorage.setItem('userName', e.target.value.trim());
+        markPanelDirty();
     });
 
-    const cfgMinimize = document.getElementById('cfg-minimize');
-    if (cfgMinimize) {
-        cfgMinimize.addEventListener('click', async () => {
-            try { await window.sarraAPI?.minimizeWindow?.(); } catch (e) { /* noop */ }
+    // Moteurs IA & voix (selects)
+    document.getElementById('cfg-reasoning-provider')?.addEventListener('change', (e) => {
+        localStorage.setItem('reasoningProvider', e.target.value);
+        syncAltProvidersVisibility();
+        markPanelDirty();
+    });
+    document.getElementById('cfg-reasoning-model')?.addEventListener('change', (e) => {
+        localStorage.setItem('reasoningModel', e.target.value);
+        markPanelDirty();
+    });
+    document.getElementById('cfg-tts-provider')?.addEventListener('change', (e) => {
+        localStorage.setItem('ttsProvider', e.target.value);
+        syncAltProvidersVisibility();
+        markPanelDirty();
+    });
+    document.getElementById('cfg-browser-voice')?.addEventListener('change', (e) => {
+        localStorage.setItem('selectedVoice', e.target.value);
+        markPanelDirty();
+    });
+    document.getElementById('cfg-elevenlabs-voice')?.addEventListener('change', (e) => {
+        localStorage.setItem('elevenVoiceId', e.target.value);
+        markPanelDirty();
+    });
+    document.getElementById('cfg-gemini-tts-voice')?.addEventListener('change', (e) => {
+        localStorage.setItem('geminiTTSVoice', e.target.value);
+        localStorage.setItem('geminiVoice', e.target.value);
+        markPanelDirty();
+    });
+
+    // Sliders avec sauvegarde temps réel + formatage précis.
+    const liveSliders = {
+        'cfg-lip-sensitivity': 'lipSensitivity',
+        'cfg-lip-speed': 'lipSpeed',
+        'cfg-lip-jaw': 'lipJaw',
+        'cfg-lip-smoothing': 'lipSmoothing',
+        'cfg-lip-threshold': 'lipThreshold',
+        'cfg-emo-blink-rate': 'emoBlinkRate',
+        'cfg-emo-blink': 'emoBlink',
+        'cfg-emo-neck': 'emoNeck',
+        'cfg-emo-breath': 'emoBreath',
+        'cfg-emo-gaze': 'emoGaze',
+        'cfg-emo-brow': 'emoBrow'
+    };
+    Object.entries(liveSliders).forEach(([id, key]) => {
+        const slider = document.getElementById(id);
+        const valueDisplay = document.getElementById(`val-${id.replace('cfg-', '')}`);
+        if (!slider) return;
+        slider.addEventListener('input', () => {
+            localStorage.setItem(key, slider.value);
+            if (key === 'emoBrow') localStorage.setItem('emoAngry', slider.value);
+            if (valueDisplay) valueDisplay.textContent = formatSliderValue(id, slider.value);
+            markPanelDirty();
         });
-    }
-
-    document.querySelectorAll('.slider-group input[type="range"]').forEach(slider => {
-        const valueDisplay = document.getElementById(`val-${slider.id.replace('cfg-', '')}`);
-        if (valueDisplay) {
-            slider.addEventListener('input', () => { valueDisplay.textContent = slider.value; });
-        }
     });
 
+    // Checkboxes & mémoire avec persistance immédiate.
+    document.getElementById('cfg-lip-teeth')?.addEventListener('change', (e) => {
+        localStorage.setItem('lipTeeth', String(e.target.checked));
+        markPanelDirty();
+    });
+    document.getElementById('cfg-auto-fallback')?.addEventListener('change', (e) => {
+        localStorage.setItem('autoFallback', String(e.target.checked));
+        applyFallbackSetting();
+        markPanelDirty();
+    });
+    document.getElementById('cfg-screen-vision')?.addEventListener('change', (e) => {
+        localStorage.setItem('screenVision', e.target.checked ? 'true' : 'false');
+        markPanelDirty();
+    });
+    document.getElementById('cfg-demo-mode')?.addEventListener('change', (e) => {
+        localStorage.setItem('demoMode', String(e.target.checked));
+        markPanelDirty();
+    });
+    document.getElementById('cfg-memory-enabled')?.addEventListener('change', (e) => {
+        localStorage.setItem('memoryEnabled', String(e.target.checked));
+        markPanelDirty();
+    });
+    document.getElementById('cfg-memory-size')?.addEventListener('input', (e) => {
+        const parsed = Number.parseInt(e.target.value, 10);
+        const limit = Math.max(0, Math.min(10, Number.isFinite(parsed) ? parsed : 10));
+        localStorage.setItem('memorySize', String(limit));
+        avatarMemory = limit ? avatarMemory.slice(-limit) : [];
+        localStorage.setItem('avatarMemory', JSON.stringify(avatarMemory));
+        updateMemoryPreview();
+        markPanelDirty();
+    });
+
+    // Synchronisation immédiate des clés saisies + badges.
+    const liveKeyBindings = [
+        ['cfg-gemini-key', ['geminiKey', 'apiKey']],
+        ['cfg-groq-key', ['groqKey']],
+        ['cfg-openrouter-key', ['openRouterKey', 'openrouterKey']],
+        ['cfg-elevenlabs-key', ['elevenlabsKey', 'ttsKey']],
+        ['cfg-gemini-tts-key', ['geminiTTSKey', 'geminiTtsKey']]
+    ];
+    liveKeyBindings.forEach(([id, keys]) => {
+        const input = document.getElementById(id);
+        if (!input) return;
+        const sync = () => {
+            const val = input.value.trim();
+            keys.forEach((k) => localStorage.setItem(k, val));
+            updateKeyBadges();
+            markPanelDirty();
+        };
+        input.addEventListener('change', sync);
+        input.addEventListener('input', updateKeyBadges);
+    });
+
+    // Directives principales
     const directivesTextarea = document.getElementById('cfg-core-directives');
     const charCount = document.getElementById('directive-count');
     if (directivesTextarea && charCount) {
         directivesTextarea.addEventListener('input', () => {
-            charCount.textContent = directivesTextarea.value.length;
+            charCount.textContent = String(directivesTextarea.value.length);
             localStorage.setItem('coreDirectives', directivesTextarea.value);
+            syncActivePresetButtons(directivesTextarea.value);
+            markPanelDirty();
         });
     }
 
-    const presets = {
-        friendly: "Tu es Sarra, une assistante IA chaleureuse et bienveillante. Tu parles en français avec un ton naturel, amical et encourageant. Tu utilises le tutoiement et tu montres de l'empathie.",
-        professional: "Tu es Sarra, une assistante IA professionnelle et efficace. Tu communiques en français avec clarté et précision. Ton ton est poli, structuré et orienté résultats.",
-        pedagogical: "Tu es Sarra, une assistante IA pédagogique. Tu expliques les concepts de manière claire, progressive et illustrée par des exemples concrets. Tu vérifies la compréhension.",
-        humorous: "Tu es Sarra, une assistante IA avec un sens de l'humour développé. Tu réponds en français avec légèreté, tu utilises des métaphores amusantes et tu sais dérider l'atmosphère."
+    const applyDirectivePreset = (preset) => {
+        const text = DIRECTIVE_PRESETS[preset];
+        if (text && directivesTextarea) {
+            directivesTextarea.value = text;
+            if (charCount) charCount.textContent = String(text.length);
+            localStorage.setItem('coreDirectives', text);
+            syncActivePresetButtons(text);
+            markPanelDirty();
+        }
     };
-    document.querySelectorAll('.btn-preset').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const preset = btn.dataset.preset;
-            if (presets[preset] && directivesTextarea) {
-                directivesTextarea.value = presets[preset];
-                if (charCount) charCount.textContent = String(presets[preset].length);
-                localStorage.setItem('coreDirectives', presets[preset]);
-            }
-        });
+
+    document.querySelectorAll('.btn-preset').forEach((btn) => {
+        btn.addEventListener('click', () => applyDirectivePreset(btn.dataset.preset));
+    });
+    document.getElementById('directive-template')?.addEventListener('change', (event) => {
+        if (event.target.value) applyDirectivePreset(event.target.value);
+        event.target.value = '';
+    });
+    document.getElementById('reset-directives')?.addEventListener('click', () => {
+        if (directivesTextarea) {
+            directivesTextarea.value = '';
+            if (charCount) charCount.textContent = '0';
+            localStorage.setItem('coreDirectives', '');
+            syncActivePresetButtons('');
+            markPanelDirty();
+        }
     });
 
-    document.querySelectorAll('.btn-test').forEach(btn => {
+    // Tests API & voix
+    document.querySelectorAll('.btn-test').forEach((btn) => {
         btn.addEventListener('click', async () => {
             const provider = btn.dataset.test;
-            if (!provider) return; // bouton dédié (ex. vision) : handler propre
+            if (!provider) return;
             const statusEl = document.getElementById(`status-${provider}`);
+            const origLabel = btn.dataset.origLabel || btn.textContent;
+            btn.dataset.origLabel = origLabel;
             btn.disabled = true;
             btn.textContent = '⏳ Test...';
             if (statusEl) {
@@ -2965,8 +3272,10 @@ function initConfigPanelV2() {
                 else if (provider === 'groq') result = await testGroqKey(value('cfg-groq-key'));
                 else if (provider === 'openrouter') result = await testOpenRouterKey(value('cfg-openrouter-key'));
                 else if (provider === 'elevenlabs') result = await testElevenLabsKey(value('cfg-elevenlabs-key'));
-                else if (provider === 'gemini-tts') result = await testGeminiTTSKey(value('cfg-gemini-tts-key') || resolveDemoApiKey());
-                else if (provider === 'browser-voice') {
+                else if (provider === 'gemini-tts') {
+                    const key = value('cfg-gemini-tts-key') || value('cfg-gemini-key') || resolveDemoApiKey();
+                    result = await testGeminiTTSKey(key);
+                } else if (provider === 'browser-voice') {
                     testBrowserVoice();
                     if (statusEl) {
                         statusEl.textContent = '✅ Voix lancée';
@@ -2975,7 +3284,7 @@ function initConfigPanelV2() {
                     return;
                 }
                 if (statusEl) {
-                    statusEl.textContent = result.ok ? '✅ Valide' : `❌ ${result.error}`;
+                    statusEl.textContent = result.ok ? (result.message || '✅ Valide') : `❌ ${result.error}`;
                     statusEl.className = `status-indicator ${result.ok ? 'success' : 'error'}`;
                 }
             } catch (e) {
@@ -2985,23 +3294,12 @@ function initConfigPanelV2() {
                 }
             } finally {
                 btn.disabled = false;
-                btn.textContent = provider === 'browser-voice' ? '🔊 Tester voix' : '🧪 Tester';
+                btn.textContent = origLabel;
             }
         });
     });
 
-    // Modèle prioritaire : persistance immédiate (sans attendre Sauvegarder).
-    document.getElementById('cfg-reasoning-model')?.addEventListener('change', (e) => {
-        localStorage.setItem('reasoningModel', e.target.value);
-        console.log('🧠 Modèle prioritaire:', e.target.value);
-    });
-
-    // Vision écran : toggle persistant + test de capture.
-    const visionToggle = document.getElementById('cfg-screen-vision');
-    visionToggle?.addEventListener('change', () => {
-        localStorage.setItem('screenVision', visionToggle.checked ? 'true' : 'false');
-    });
-
+    // Test capture d'écran
     document.getElementById('btn-test-vision')?.addEventListener('click', async () => {
         const btn = document.getElementById('btn-test-vision');
         const statusEl = document.getElementById('status-vision');
@@ -3017,7 +3315,7 @@ function initConfigPanelV2() {
         try {
             const started = performance.now();
             const image = await captureScreen();
-            if (!image) throw new Error('Capture indisponible (backend 3000 ?)');
+            if (!image) throw new Error('Capture indisponible (Electron ou backend 3000)');
             if (preview) {
                 preview.src = `data:${image.mimeType};base64,${image.data}`;
                 preview.style.display = 'block';
@@ -3038,29 +3336,99 @@ function initConfigPanelV2() {
         }
     });
 
+    // Lipsync : test, calibration & reset
     document.getElementById('btn-auto-calibrate')?.addEventListener('click', runAutoCalibration);
     document.getElementById('btn-test-lipsync')?.addEventListener('click', () => {
-        if (typeof animateLipSyncFromText === 'function') {
-            animateLipSyncFromText("Bonjour, je suis Sarra. Enchantée de faire votre connaissance.");
+        const name = localStorage.getItem('avatarName')?.trim() || 'Sarra';
+        const phrase = `Bonjour, je suis ${name}. Enchantée de faire votre connaissance.`;
+        if (typeof speakWithBestVoice === 'function') speakWithBestVoice(phrase);
+        else if (typeof animateLipSyncFromText === 'function') animateLipSyncFromText(phrase);
+    });
+    document.getElementById('btn-reset-lipsync')?.addEventListener('click', () => {
+        const defaults = {
+            'cfg-lip-sensitivity': ['lipSensitivity', '1'],
+            'cfg-lip-speed': ['lipSpeed', '1'],
+            'cfg-lip-jaw': ['lipJaw', '1'],
+            'cfg-lip-smoothing': ['lipSmoothing', '0.1'],
+            'cfg-lip-threshold': ['lipThreshold', '0.05']
+        };
+        Object.entries(defaults).forEach(([id, [key, val]]) => {
+            const el = document.getElementById(id);
+            if (el) el.value = val;
+            localStorage.setItem(key, val);
+            const disp = document.getElementById(`val-${id.replace('cfg-', '')}`);
+            if (disp) disp.textContent = formatSliderValue(id, val);
+        });
+        const teeth = document.getElementById('cfg-lip-teeth');
+        if (teeth) teeth.checked = true;
+        localStorage.setItem('lipTeeth', 'true');
+        markPanelDirty();
+        const st = document.getElementById('calibration-status');
+        if (st) {
+            st.textContent = 'Réglages lipsync remis par défaut.';
+            st.className = 'status warn';
         }
     });
 
-    document.getElementById('btn-view-memory')?.addEventListener('click', updateMemoryPreview);
-    document.getElementById('btn-clear-memory')?.addEventListener('click', () => {
-        if (confirm('Vider toute la mémoire de Sarra ?')) {
-            localStorage.removeItem('avatarMemory');
-            avatarMemory = [];
-            updateMemoryPreview();
+    // Émotions : aperçu direct + reset
+    document.querySelectorAll('#emotion-preview-buttons [data-preview-emotion]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            previewVrmEmotion(btn.dataset.previewEmotion, btn.textContent);
+        });
+    });
+    document.getElementById('btn-reset-emotions')?.addEventListener('click', () => {
+        const defaults = {
+            'cfg-emo-blink-rate': ['emoBlinkRate', '4'],
+            'cfg-emo-blink': ['emoBlink', '0.8'],
+            'cfg-emo-neck': ['emoNeck', '0.08'],
+            'cfg-emo-breath': ['emoBreath', '0.015'],
+            'cfg-emo-gaze': ['emoGaze', '0.03'],
+            'cfg-emo-brow': ['emoBrow', '0.1']
+        };
+        Object.entries(defaults).forEach(([id, [key, val]]) => {
+            const el = document.getElementById(id);
+            if (el) el.value = val;
+            localStorage.setItem(key, val);
+            if (key === 'emoBrow') localStorage.setItem('emoAngry', val);
+            const disp = document.getElementById(`val-${id.replace('cfg-', '')}`);
+            if (disp) disp.textContent = formatSliderValue(id, val);
+        });
+        previewVrmEmotion('neutral', 'Neutre (valeurs par défaut)');
+        markPanelDirty();
+    });
+
+    // Mémoire
+    document.getElementById('btn-view-memory')?.addEventListener('click', () => {
+        updateMemoryPreview();
+        const status = document.getElementById('memory-status');
+        if (status) {
+            status.textContent = 'Liste actualisée.';
+            status.className = 'status ok';
         }
     });
 
-    document.getElementById('btn-factory-reset')?.addEventListener('click', factoryReset);
-    document.getElementById('btn-reset-all')?.addEventListener('click', factoryReset);
+    armTwoStepConfirm(document.getElementById('btn-clear-memory'), 'Confirmer ?', () => {
+        localStorage.removeItem('avatarMemory');
+        avatarMemory = [];
+        updateMemoryPreview();
+        const status = document.getElementById('memory-status');
+        if (status) {
+            status.textContent = 'Mémoire effacée.';
+            status.className = 'status ok';
+        }
+    });
+
+    armTwoStepConfirm(document.getElementById('btn-factory-reset'), 'Confirmer reset ?', factoryReset);
     document.getElementById('cfg-save')?.addEventListener('click', saveAllConfigV2);
+
+    if ('speechSynthesis' in window) {
+        window.speechSynthesis.addEventListener('voiceschanged', populateVoiceList);
+    }
 
     loadConfigValuesV2();
     populateVoiceList();
     updateMemoryPreview();
+    updateAvatarBoundsInfo();
 }
 
 async function testGeminiKey(key) {
@@ -3075,7 +3443,7 @@ async function testGeminiKey(key) {
                 body: JSON.stringify({ contents: [{ parts: [{ text: 'Hi' }] }] }),
                 signal: AbortSignal.timeout(8000)
             });
-            if (resp.ok) return { ok: true };
+            if (resp.ok) return { ok: true, message: `✅ Valide (${model})` };
             const err = await resp.json().catch(() => ({}));
             lastError = err.error?.message || `HTTP ${resp.status}`;
             if (!(resp.status === 503 || resp.status === 429 || resp.status === 404)) break;
@@ -3125,11 +3493,9 @@ async function testOpenRouterKey(key) {
         const headers = {
             Authorization: `Bearer ${key}`,
             'Content-Type': 'application/json',
-            'HTTP-Referer': 'https://sarra-final.local',  // ← CRITIQUE
-            'X-Title': 'Sarra Final Avatar'                // ← CRITIQUE
+            'HTTP-Referer': 'https://sarra-final.local',
+            'X-Title': 'Sarra Final Avatar'
         };
-        // Modèle courant récupéré dynamiquement (les deux IDs historiques
-        // ci-dessous ont été retirés du catalogue OpenRouter).
         const current = await getOpenRouterFreeModel();
         const models = [
             current,
@@ -3164,17 +3530,33 @@ async function testElevenLabsKey(key) {
 }
 
 async function testGeminiTTSKey(key) {
-    return await testGeminiKey(key);
+    if (!key || key.length < 20) return { ok: false, error: 'Clé Gemini manquante' };
+    const voiceName = getGeminiVoice();
+    const avatarLabel = document.getElementById('cfg-avatar-name')?.value.trim() || localStorage.getItem('avatarName') || 'Sarra';
+    const userLabel = document.getElementById('cfg-user-name')?.value.trim() || localStorage.getItem('userName') || '';
+    const sample = `Bonjour${userLabel ? ` ${userLabel}` : ''}, je suis ${avatarLabel}. Voici ma voix par défaut.`;
+    try {
+        localStorage.setItem('geminiTTSKey', key);
+        localStorage.setItem('geminiTtsKey', key);
+        await speakWithGemini(sample, { key, voiceName, model: GEMINI_TTS_MODELS[0] });
+        return { ok: true, message: `✅ Voix "${voiceName}"` };
+    } catch (e) {
+        return { ok: false, error: e?.message || 'TTS indisponible' };
+    }
 }
 
 function testBrowserVoice() {
-    const utter = new SpeechSynthesisUtterance('Bonjour, je suis Sarra.');
+    const avatarLabel = document.getElementById('cfg-avatar-name')?.value.trim() || localStorage.getItem('avatarName') || 'Sarra';
+    const userLabel = document.getElementById('cfg-user-name')?.value.trim() || localStorage.getItem('userName') || '';
+    const utter = new SpeechSynthesisUtterance(`Bonjour${userLabel ? ` ${userLabel}` : ''}, je suis ${avatarLabel}.`);
     utter.lang = 'fr-FR';
     const voiceName = document.getElementById('cfg-browser-voice')?.value;
     if (voiceName) {
+        localStorage.setItem('selectedVoice', voiceName);
         const voice = speechSynthesis.getVoices().find((v) => v.name === voiceName);
         if (voice) utter.voice = voice;
     }
+    speechSynthesis.cancel();
     speechSynthesis.speak(utter);
 }
 
@@ -3182,7 +3564,7 @@ async function runAutoCalibration() {
     const statusEl = document.getElementById('calibration-status');
     if (statusEl) {
         statusEl.textContent = '🎯 Calibration en cours... Sarra va prononcer une phrase test.';
-        statusEl.style.color = '#f59e0b';
+        statusEl.className = 'status warn';
     }
     const testPhrase = "Bonjour, je suis Sarra. Comment allez-vous aujourd'hui ?";
     if (typeof speakWithBestVoice === 'function') await speakWithBestVoice(testPhrase);
@@ -3196,7 +3578,7 @@ async function runAutoCalibration() {
     localStorage.setItem('lipSensitivity', sensitivity.toFixed(1));
     if (statusEl) {
         statusEl.textContent = `✅ Calibration terminée. Sensibilité ajustée à ${sensitivity.toFixed(1)}`;
-        statusEl.style.color = '#22c55e';
+        statusEl.className = 'status ok';
     }
 }
 
@@ -3205,38 +3587,45 @@ function loadConfigValuesV2() {
         const el = document.getElementById(id);
         if (el) el.value = localStorage.getItem(key) ?? def;
     };
-    // IA de raisonnement : Gemini Lite stable par défaut au premier lancement.
-    // Une valeur obsolète en localStorage (ex. gemini-3.8-flash en 503) est migrée.
+
+    get('cfg-avatar-name', 'avatarName', 'Sarra');
+    get('cfg-user-name', 'userName', '');
+
     if (!GEMINI_MODEL_ORDER.includes(localStorage.getItem('reasoningModel'))) {
         localStorage.setItem('reasoningModel', GEMINI_MODEL_DEMO);
     }
     if (localStorage.getItem('reasoningProvider') === null) {
         localStorage.setItem('reasoningProvider', 'gemini');
     }
-    get('cfg-reasoning-model', 'reasoningModel', GEMINI_MODEL_DEMO); // select optionnel
+    get('cfg-reasoning-provider', 'reasoningProvider', 'gemini');
+    get('cfg-reasoning-model', 'reasoningModel', GEMINI_MODEL_DEMO);
 
-    // Voix TTS : Gemini TTS (Kore) par défaut.
     if (localStorage.getItem('ttsProvider') === null) {
         localStorage.setItem('ttsProvider', 'gemini-tts');
     }
     if (localStorage.getItem('geminiTTSVoice') === null) {
-        localStorage.setItem('geminiTTSVoice', 'Kore');
+        localStorage.setItem('geminiTTSVoice', localStorage.getItem('geminiVoice') || 'Kore');
     }
     if (localStorage.getItem('geminiVoice') === null) {
-        localStorage.setItem('geminiVoice', 'Kore');
+        localStorage.setItem('geminiVoice', localStorage.getItem('geminiTTSVoice') || 'Kore');
     }
+    get('cfg-tts-provider', 'ttsProvider', 'gemini-tts');
 
     const geminiKey = localStorage.getItem('geminiKey') || localStorage.getItem('apiKey') || '';
     if (localStorage.getItem('geminiTTSKey') === null) {
         localStorage.setItem('geminiTTSKey', geminiKey);
     }
     get('cfg-gemini-key', 'geminiKey', '');
-    if (!document.getElementById('cfg-gemini-key')?.value) document.getElementById('cfg-gemini-key').value = geminiKey;
+    if (!document.getElementById('cfg-gemini-key')?.value) {
+        const gEl = document.getElementById('cfg-gemini-key');
+        if (gEl) gEl.value = geminiKey;
+    }
     get('cfg-groq-key', 'groqKey', '');
-    get('cfg-openrouter-key', 'openrouterKey', '');
+    const openRouterEl = document.getElementById('cfg-openrouter-key');
+    if (openRouterEl) openRouterEl.value = localStorage.getItem('openRouterKey') ?? localStorage.getItem('openrouterKey') ?? '';
     get('cfg-elevenlabs-key', 'elevenlabsKey', localStorage.getItem('ttsKey') || '');
-    get('cfg-gemini-tts-key', 'geminiTTSKey', geminiKey);
-    get('cfg-tts-provider', 'ttsProvider', 'gemini-tts'); // select optionnel
+    get('cfg-gemini-tts-key', 'geminiTTSKey', localStorage.getItem('geminiTtsKey') || geminiKey);
+    get('cfg-elevenlabs-voice', 'elevenVoiceId', 'Rachel');
     const voiceSelect = document.getElementById('cfg-gemini-tts-voice');
     if (voiceSelect) {
         voiceSelect.value = localStorage.getItem('geminiTTSVoice')
@@ -3244,7 +3633,15 @@ function loadConfigValuesV2() {
             || 'Kore';
     }
     get('cfg-core-directives', 'coreDirectives', DIRECTIVE_PRESETS.friendly);
-    get('cfg-memory-size', 'memorySize', '10');
+
+    const memEnabledEl = document.getElementById('cfg-memory-enabled');
+    if (memEnabledEl) memEnabledEl.checked = localStorage.getItem('memoryEnabled') !== 'false';
+
+    const savedMem = Number.parseInt(localStorage.getItem('memorySize') || '10', 10);
+    const clampedMem = Math.max(0, Math.min(10, Number.isFinite(savedMem) ? savedMem : 10));
+    const memEl = document.getElementById('cfg-memory-size');
+    if (memEl) memEl.value = String(clampedMem);
+
     get('cfg-lip-sensitivity', 'lipSensitivity', '1');
     get('cfg-lip-speed', 'lipSpeed', '1');
     get('cfg-lip-jaw', 'lipJaw', '1');
@@ -3257,31 +3654,45 @@ function loadConfigValuesV2() {
     get('cfg-emo-gaze', 'emoGaze', '0.03');
     get('cfg-emo-brow', 'emoBrow', localStorage.getItem('emoAngry') || '0.1');
 
-    document.querySelectorAll('.slider-group input[type="range"]').forEach(slider => {
+    document.querySelectorAll('#config-panel input[type="range"]').forEach((slider) => {
         const valueDisplay = document.getElementById(`val-${slider.id.replace('cfg-', '')}`);
-        if (valueDisplay) valueDisplay.textContent = slider.value;
+        if (valueDisplay) valueDisplay.textContent = formatSliderValue(slider.id, slider.value);
     });
-    const charCount = document.getElementById('directive-count');
+
+    const teethEl = document.getElementById('cfg-lip-teeth');
+    if (teethEl) teethEl.checked = localStorage.getItem('lipTeeth') !== 'false';
+
+    const fallbackEl = document.getElementById('cfg-auto-fallback');
+    if (fallbackEl) fallbackEl.checked = localStorage.getItem('autoFallback') !== 'false';
+
     const directivesTextarea = document.getElementById('cfg-core-directives');
-    if (charCount && directivesTextarea) charCount.textContent = String(directivesTextarea.value.length);
+    const charCount = document.getElementById('directive-count');
+    if (charCount && directivesTextarea) {
+        charCount.textContent = String(directivesTextarea.value.length);
+        syncActivePresetButtons(directivesTextarea.value);
+    }
 
     const demoModeEl = document.getElementById('cfg-demo-mode');
     if (demoModeEl) demoModeEl.checked = localStorage.getItem('demoMode') === 'true';
 
-    // Vision écran : activée par défaut.
     if (localStorage.getItem('screenVision') === null) {
         localStorage.setItem('screenVision', 'true');
     }
     const visionEl = document.getElementById('cfg-screen-vision');
     if (visionEl) visionEl.checked = SCREEN_VISION_ENABLED();
 
-    // Compatibilité runtime (clés lues par l'avatar et l'API).
+    const minBtn = document.getElementById('cfg-minimize');
+    const panel = document.getElementById('config-panel');
+    if (minBtn && panel) minBtn.textContent = panel.classList.contains('is-collapsed') ? '+' : '—';
+
     localStorage.setItem('apiKey', geminiKey);
     localStorage.setItem('emoAngry', localStorage.getItem('emoBrow') || '0.1');
-    localStorage.setItem('autoFallback', String(document.getElementById('cfg-auto-fallback')?.checked ?? true));
     applyFallbackSetting();
-    bindPanelVCards();
+    updateKeyBadges();
+    syncAltProvidersVisibility();
     applySavedPosition();
+    updateAvatarBoundsInfo();
+    markPanelSaved();
 }
 
 function saveAllConfigV2() {
@@ -3289,16 +3700,35 @@ function saveAllConfigV2() {
         const el = document.getElementById(id);
         if (el) localStorage.setItem(key, el.value);
     };
+    const avatarVal = document.getElementById('cfg-avatar-name')?.value.trim() || 'Sarra';
+    const userVal = document.getElementById('cfg-user-name')?.value.trim() || '';
+    localStorage.setItem('avatarName', avatarVal);
+    localStorage.setItem('userName', userVal);
+
     set('cfg-gemini-key', 'geminiKey');
     set('cfg-groq-key', 'groqKey');
-    set('cfg-openrouter-key', 'openrouterKey');
+    set('cfg-openrouter-key', 'openRouterKey');
     set('cfg-elevenlabs-key', 'elevenlabsKey');
     set('cfg-gemini-tts-key', 'geminiTTSKey');
+    set('cfg-browser-voice', 'selectedVoice');
+    set('cfg-elevenlabs-voice', 'elevenVoiceId');
     set('cfg-gemini-tts-voice', 'geminiTTSVoice');
+    set('cfg-reasoning-provider', 'reasoningProvider');
     set('cfg-reasoning-model', 'reasoningModel');
     set('cfg-tts-provider', 'ttsProvider');
     set('cfg-core-directives', 'coreDirectives');
-    set('cfg-memory-size', 'memorySize');
+
+    const memEnabled = document.getElementById('cfg-memory-enabled')?.checked ?? true;
+    localStorage.setItem('memoryEnabled', String(memEnabled));
+
+    const memInput = document.getElementById('cfg-memory-size');
+    const parsedMem = Number.parseInt(memInput?.value || '10', 10);
+    const clampedMem = Math.max(0, Math.min(10, Number.isFinite(parsedMem) ? parsedMem : 10));
+    if (memInput) memInput.value = String(clampedMem);
+    localStorage.setItem('memorySize', String(clampedMem));
+    avatarMemory = clampedMem ? avatarMemory.slice(-clampedMem) : [];
+    localStorage.setItem('avatarMemory', JSON.stringify(avatarMemory));
+
     set('cfg-lip-sensitivity', 'lipSensitivity');
     set('cfg-lip-speed', 'lipSpeed');
     set('cfg-lip-jaw', 'lipJaw');
@@ -3313,54 +3743,94 @@ function saveAllConfigV2() {
 
     // Miroirs utilisés par le moteur d'IA, le TTS et l'animation.
     localStorage.setItem('apiKey', localStorage.getItem('geminiKey') || '');
+    localStorage.setItem('openrouterKey', localStorage.getItem('openRouterKey') || '');
     localStorage.setItem('ttsKey', localStorage.getItem('elevenlabsKey') || '');
+    localStorage.setItem('geminiTtsKey', localStorage.getItem('geminiTTSKey') || '');
+    localStorage.setItem('geminiVoice', localStorage.getItem('geminiTTSVoice') || 'Kore');
     localStorage.setItem('emoAngry', localStorage.getItem('emoBrow') || '0.1');
-    localStorage.setItem('reasoningProvider',
-        document.querySelector('#tab-ia .provider-card[data-provider].active')?.dataset.provider || 'gemini');
     localStorage.setItem('ttsProvider', getTtsProvider());
+    localStorage.setItem('lipTeeth', String(document.getElementById('cfg-lip-teeth')?.checked ?? true));
     localStorage.setItem('autoFallback', String(document.getElementById('cfg-auto-fallback')?.checked ?? true));
     localStorage.setItem('screenVision', String(document.getElementById('cfg-screen-vision')?.checked ?? true));
+    localStorage.setItem('demoMode', String(document.getElementById('cfg-demo-mode')?.checked ?? false));
     applyFallbackSetting();
+    updateKeyBadges();
     saveAvatarState();
+    savePanelState(document.getElementById('config-panel'));
     updateMemoryPreview();
+    markPanelSaved();
 
     const status = document.getElementById('save-status');
     if (status) {
-        status.textContent = '✅ Configuration sauvegardée';
-        status.className = 'save-status success';
+        status.textContent = '✅ Configuration sauvegardée comme défaut.';
+        status.className = 'save-state success';
         setTimeout(() => { status.textContent = ''; }, 3000);
     }
 }
 
 function factoryReset() {
-    if (!confirm('⚠️ Réinitialiser tous les réglages aux valeurs par défaut ? Cette action est irréversible.')) return;
     const keys = [
-        'geminiKey', 'groqKey', 'openrouterKey', 'elevenlabsKey', 'geminiTTSKey', 'apiKey', 'ttsKey',
-        'coreDirectives', 'memorySize', 'lipSensitivity', 'lipSpeed', 'lipJaw', 'lipSmoothing',
-        'lipThreshold', 'emoBlinkRate', 'emoBlink', 'emoNeck', 'emoBreath', 'emoGaze', 'emoBrow',
-        'emoAngry', 'reasoningProvider', 'reasoningModel', 'ttsProvider', 'autoFallback', 'selectedVoice',
-        'elevenVoiceId', 'geminiVoice', 'geminiTTSVoice', 'avatarMemory', 'sarra_window_state'
+        'avatarName', 'userName', 'onboardingSkipped',
+        'geminiKey', 'groqKey', 'openRouterKey', 'openrouterKey', 'elevenlabsKey', 'geminiTTSKey', 'geminiTtsKey',
+        'apiKey', 'ttsKey', 'coreDirectives', 'memoryEnabled', 'memorySize', 'lipSensitivity', 'lipSpeed', 'lipJaw',
+        'lipSmoothing', 'lipThreshold', 'lipTeeth', 'emoBlinkRate', 'emoBlink', 'emoNeck', 'emoBreath',
+        'emoGaze', 'emoBrow', 'emoAngry', 'reasoningProvider', 'reasoningModel', 'ttsProvider',
+        'autoFallback', 'screenVision', 'demoMode', 'selectedVoice', 'elevenVoiceId', 'geminiVoice',
+        'geminiTTSVoice', 'avatarMemory', 'sarra_window_state', PANEL_STATE_KEY
     ];
-    keys.forEach(k => localStorage.removeItem(k));
+    keys.forEach((k) => localStorage.removeItem(k));
     location.reload();
 }
 
 function updateMemoryPreview() {
     const box = document.getElementById('memory-preview');
-    if (!box) return;
+    const stats = document.getElementById('memory-stats');
     let mem = [];
     try { mem = JSON.parse(localStorage.getItem('avatarMemory') || '[]'); } catch { mem = []; }
+    if (!Array.isArray(mem)) mem = [];
+
+    const maxMem = Math.max(0, Math.min(10, Number.parseInt(localStorage.getItem('memorySize') || '10', 10) || 10));
+    if (stats) {
+        const countSpan = document.createElement('span');
+        countSpan.innerHTML = `échanges <b>${mem.length}</b>`;
+        const maxSpan = document.createElement('span');
+        maxSpan.innerHTML = `plafond <b>${maxMem}</b>`;
+        stats.replaceChildren(countSpan, maxSpan);
+    }
+
+    if (!box) return;
     box.replaceChildren();
-    if (!Array.isArray(mem) || !mem.length) {
-        const empty = document.createElement('em');
-        empty.textContent = 'La mémoire est vide.';
-        box.appendChild(empty);
+    if (!mem.length) {
+        const li = document.createElement('li');
+        li.className = 'note';
+        li.textContent = 'Aucun souvenir pour le moment : les échanges s’ajoutent automatiquement.';
+        box.appendChild(li);
         return;
     }
-    mem.forEach((entry) => {
-        const line = document.createElement('div');
-        line.textContent = `• ${entry}`;
-        box.appendChild(line);
+
+    mem.forEach((entry, index) => {
+        const li = document.createElement('li');
+        const kind = document.createElement('span');
+        kind.className = 'kind';
+        kind.textContent = 'Échange';
+        const text = document.createElement('span');
+        text.className = 'text';
+        text.textContent = entry;
+        const forget = document.createElement('button');
+        forget.type = 'button';
+        forget.textContent = 'Oublier';
+        forget.addEventListener('click', () => {
+            avatarMemory = mem.filter((_, i) => i !== index);
+            localStorage.setItem('avatarMemory', JSON.stringify(avatarMemory));
+            updateMemoryPreview();
+            const status = document.getElementById('memory-status');
+            if (status) {
+                status.textContent = 'Souvenir oublié.';
+                status.className = 'status ok';
+            }
+        });
+        li.append(kind, text, forget);
+        box.appendChild(li);
     });
 }
 
@@ -3368,15 +3838,24 @@ function populateVoiceList() {
     const select = document.getElementById('cfg-browser-voice');
     if (!select) return;
     select.replaceChildren();
-    const voices = window.speechSynthesis?.getVoices().filter(v => v.lang.startsWith('fr')) || [];
-    voices.forEach(v => {
+    const allVoices = window.speechSynthesis?.getVoices() || [];
+    const frVoices = allVoices.filter(v => (v.lang || '').toLowerCase().startsWith('fr'));
+    const list = frVoices.length ? frVoices : allVoices;
+    if (!list.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Voix système par défaut';
+        select.appendChild(opt);
+        return;
+    }
+    list.forEach(v => {
         const opt = document.createElement('option');
         opt.value = v.name;
         opt.textContent = `${v.name} (${v.lang})`;
         select.appendChild(opt);
     });
     const saved = localStorage.getItem('selectedVoice');
-    if (saved) select.value = saved;
+    if (saved && list.some(v => v.name === saved)) select.value = saved;
 }
 
 // Démarrage de l'overlay une fois le DOM prêt.
@@ -3390,3 +3869,5 @@ if (document.readyState === 'loading') {
 window.askSarra = askSarraDirect;
 window.askSarraDirect = askSarraDirect;
 window.speakWithBestVoice = speakWithBestVoice;
+window.__sarra = window.__sarra || {};
+window.__sarra.toggleConfigPanel = toggleConfigPanel;
