@@ -112,6 +112,14 @@ function createWindow() {
     console.error('[Sarra] globalShortcut CommandOrControl+Alt+Shift+D NON enregistré (conflit système)');
   }
 
+  const okQuitShortcut = globalShortcut.register('CommandOrControl+Alt+Shift+Q', () => {
+    console.log('[Sarra] Fermeture d’urgence via raccourci global (Ctrl+Alt+Shift+Q)');
+    app.quit();
+  });
+  if (!okQuitShortcut) {
+    console.error('[Sarra] globalShortcut CommandOrControl+Alt+Shift+Q NON enregistré (conflit système)');
+  }
+
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
     const isCtrlShiftI = (input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i';
