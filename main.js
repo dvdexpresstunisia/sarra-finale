@@ -94,6 +94,27 @@ function createWindow() {
   globalShortcut.register('CommandOrControl+Shift+K', () => {
     mainWindow.webContents.send('toggle-config-panel');
   });
+
+  const toggleDetachedDevTools = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.webContents.isDevToolsOpened()) {
+      mainWindow.webContents.closeDevTools();
+    } else {
+      mainWindow.webContents.openDevTools({ mode: 'detach' });
+    }
+  };
+
+  globalShortcut.register('CommandOrControl+Shift+D', toggleDetachedDevTools);
+
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const isCtrlShiftI = (input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i';
+    const isF12 = input.key === 'F12';
+    if (isCtrlShiftI || isF12) {
+      event.preventDefault();
+      toggleDetachedDevTools();
+    }
+  });
 }
 
 // Capture d'écran pour le contexte Vision de Sarra (IPC sécurisé, main uniquement).
@@ -184,4 +205,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });

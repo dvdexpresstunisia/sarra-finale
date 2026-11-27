@@ -833,8 +833,9 @@ loader.load(
             startNaturalGaze(vrm);
             startNaturalBlinking();
 
-            // Exposé pour le débogage dans la console du navigateur.
-            window.__sarra = {
+            // Exposé pour le débogage dans la console du navigateur (fusion sans écraser showToast / toggleConfigPanel).
+            window.__sarra = window.__sarra || {};
+            Object.defineProperties(window.__sarra, Object.getOwnPropertyDescriptors({
                 scene, camera, renderer, vrm, lookTarget, gazeTarget,
                 animateLipSyncFromText, askSarra: askSarraDirect, askSarraDirect, speakWithBestVoice,
                 headTarget, headCurrent, headBaseTarget,
@@ -849,7 +850,7 @@ loader.load(
                     return { enabled: micEnabled, suspended: micSuspended, active: recognitionActive };
                 },
                 get micRecognition() { return micRecognition; }
-            };
+            }));
 
             console.log("⚙️ Avatar ready, starting animation loop");
         } catch (error) {
