@@ -91,9 +91,12 @@ function createWindow() {
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
-  globalShortcut.register('CommandOrControl+Shift+K', () => {
+  const okConfigShortcut = globalShortcut.register('CommandOrControl+Shift+K', () => {
     mainWindow.webContents.send('toggle-config-panel');
   });
+  if (!okConfigShortcut) {
+    console.error('[Sarra] globalShortcut CommandOrControl+Shift+K NON enregistré (conflit système)');
+  }
 
   const toggleDetachedDevTools = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -104,7 +107,10 @@ function createWindow() {
     }
   };
 
-  globalShortcut.register('CommandOrControl+Shift+D', toggleDetachedDevTools);
+  const okDevToolsShortcut = globalShortcut.register('CommandOrControl+Alt+Shift+D', toggleDetachedDevTools);
+  if (!okDevToolsShortcut) {
+    console.error('[Sarra] globalShortcut CommandOrControl+Alt+Shift+D NON enregistré (conflit système)');
+  }
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return;
