@@ -21,14 +21,18 @@ async function loadFrontend(win, tries = 20) {
   for (let i = 0; i < tries; i++) {
     try {
       await win.loadURL('http://localhost:5173/');
-      console.log('[Sarra] Vite OK');
+      console.log(`[Sarra] Vite OK — origine active: ${win.webContents.getURL()}`);
       return;
-    } catch {
+    } catch (error) {
+      if (i === tries - 1) {
+        console.warn('[Sarra] Dernière tentative Vite échouée:', error?.message || error);
+      }
       await new Promise(r => setTimeout(r, 500));
     }
   }
-  console.error('[Sarra] Vite injoignable après 10s → repli dist/ (file://, localStorage distinct)');
+  console.error('[Sarra] Vite injoignable après 10s (20 × 500ms) → repli dist/index.html (origine file://, localStorage distinct de http://localhost:5173)');
   await win.loadFile(join(__dirname, 'dist', 'index.html'));
+  console.log(`[Sarra] Origine de repli chargée: ${win.webContents.getURL()}`);
 }
 
 function createWindow() {
@@ -71,6 +75,7 @@ function createWindow() {
   if (process.env.NODE_ENV === 'development') {
     loadFrontend(mainWindow);
   } else {
+    console.log('[Sarra] Mode production → chargement dist/index.html (origine file://)');
     mainWindow.loadFile(join(__dirname, 'dist', 'index.html'));
   }
 

@@ -34,7 +34,17 @@ start "Sarra - Backend Capture (3000)" cmd /k "title Backend 3000 && npm run sta
 
 start "Sarra - Frontend Vite (5173)" cmd /k "title Frontend 5173 && npm run dev"
 
-timeout /t 4 /nobreak >nul
+echo   Attente de Vite (5173) et Backend (3000)...
+node -e "const http=require('http');const check=(url,hdrs)=>new Promise(ok=>{const r=http.get(url,{headers:hdrs||{},timeout:1000},res=>{res.resume();ok(res.statusCode===200);});r.on('error',()=>ok(false));r.on('timeout',()=>{r.destroy();ok(false);});});(async()=>{for(let i=0;i<60;i++){const v1=await check('http://localhost:5173/');const v=v1?true:await check('http://127.0.0.1:5173/');const b=await check('http://127.0.0.1:3000/api/health',{'X-Sarra-Client':'sarra-desktop'});if(v?b:false){console.log('Health check OK: 5173 + 3000');process.exit(0);}await new Promise(r=>setTimeout(r,500));}console.error('ERREUR: Vite (5173) ou Backend (3000) injoignable apres 30s.');process.exit(1);})();"
+if errorlevel 1 (
+    echo.
+    echo ==========================================
+    echo   ERREUR - Echec health check 5173 / 3000
+    echo ==========================================
+    echo   Electron n'a pas ete lance pour eviter un repli file://.
+    pause
+    exit /b 1
+)
 
 start "Sarra - Electron Overlay" cmd /k "title Electron Overlay && set NODE_ENV=development && npm run electron-dev"
 

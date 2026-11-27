@@ -1582,6 +1582,7 @@ async function speakWithGeminiCascade(text, key, voiceName) {
 function speakWithBestVoice(text) {
     if (!text) return Promise.resolve();
     const provider = getTtsProvider();
+    const fallbackNever = localStorage.getItem('ttsFallback') === 'never';
     // Gemini TTS est le moteur par défaut ; cascade puis repli navigateur.
     const geminiTTSKey = localStorage.getItem('geminiTTSKey')
         || localStorage.getItem('geminiKey')
@@ -1593,11 +1594,19 @@ function speakWithBestVoice(text) {
 
     if (provider === 'gemini-tts' || provider === 'gemini') {
         if (!geminiTTSKey) {
+            if (fallbackNever) {
+                console.error('❌ TTS premium: aucune clé Gemini — repli navigateur désactivé (ttsFallback=never).');
+                return Promise.resolve();
+            }
             console.warn('⚠️ TTS premium: aucune clé Gemini — repli navigateur.');
             return speakWithBrowserVoice(text);
         }
         // Proactivité : sauter la cascade si déjà en cooldown.
         if (Date.now() < premiumCooldownUntil) {
+            if (fallbackNever) {
+                console.error('❌ TTS en refroidissement — repli navigateur désactivé (ttsFallback=never).');
+                return Promise.resolve();
+            }
             console.log('⚡ TTS en refroidissement — voix navigateur directe.');
             if (!alertShown) {
                 alertShown = true;
@@ -1607,6 +1616,10 @@ function speakWithBestVoice(text) {
         }
         // Après 2 échecs consécutifs, désactiver le premium pour la session (état en mémoire/sessionStorage).
         if (premiumFailureCount >= 2) {
+            if (fallbackNever) {
+                console.error('❌ TTS premium désactivé (2 échecs) — repli navigateur désactivé (ttsFallback=never).');
+                return Promise.resolve();
+            }
             console.warn('⚠️ TTS premium désactivé pour la session (2 échecs consécutifs). Voix navigateur.');
             return speakWithBrowserVoice(text);
         }
@@ -1623,13 +1636,13 @@ function speakWithBestVoice(text) {
             premiumCooldownUntil = Date.now() + 30 * 60 * 1000; // 30 min cooldown
             sessionStorage.setItem('sarraPremiumCooldownUntil', premiumCooldownUntil);
             console.warn('⚠️ TTS failure — launching 30-minute premium cooldown.');
-            if (premiumFailureCount >= 2) {
-                return speakWithBrowserVoice(text);
-            }
-            // Préférence utilisateur : ttsFallback=never = silence plutôt que voix robotique.
+            // Préférence utilisateur : ttsFallback=never = silence plutôt que voix robotique (avant le compteur d'échecs).
             if (localStorage.getItem('ttsFallback') === 'never') {
                 console.error('❌ TTS premium indisponible — repli navigateur désactivé (ttsFallback=never).');
                 return undefined;
+            }
+            if (premiumFailureCount >= 2) {
+                return speakWithBrowserVoice(text);
             }
             // Alerte une seule fois par session, même si la cascade échoue.
             showToast('⚠️ Voix premium momentanément indisponible — bascule sur la voix système.');
@@ -1640,6 +1653,10 @@ function speakWithBestVoice(text) {
     if (provider === 'elevenlabs') {
         return speakWithElevenLabs(text).catch((error) => {
             console.error('❌ ElevenLabs indisponible:', error);
+            if (localStorage.getItem('ttsFallback') === 'never') {
+                console.error('❌ ElevenLabs indisponible — repli navigateur désactivé (ttsFallback=never).');
+                return undefined;
+            }
             return speakWithBrowserVoice(text);
         });
     }
