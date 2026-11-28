@@ -770,7 +770,7 @@ function startEyeContextAnimation() {
 // Chargement de l'avatar VRM avec gestion d'erreurs.
 // Modèle par défaut : /sarra7.vrm — surcharge possible via ?avatar=autre.vrm
 // ─────────────────────────────────────────────────────────────────────────────
-const AVATAR_URL = new URLSearchParams(window.location.search).get('avatar') || '/sarra7.vrm';
+const AVATAR_URL = new URLSearchParams(window.location.search).get('avatar') || './sarra7.vrm';
 console.log("📦 Modèle demandé:", AVATAR_URL);
 
 loader.load(
@@ -2210,14 +2210,21 @@ function isConfigured() {
         && !!localStorage.getItem('avatarName');
 }
 
+let refreshClickThroughHandler = null;
+function refreshClickThroughState() {
+    refreshClickThroughHandler?.();
+}
+
 function showOnboarding() {
     const modal = document.getElementById('onboarding-modal');
     if (modal) modal.style.display = 'flex';
+    refreshClickThroughState();
 }
 
 function hideOnboarding() {
     const modal = document.getElementById('onboarding-modal');
     if (modal) modal.style.display = 'none';
+    refreshClickThroughState();
 }
 
 function saveOnboarding() {
@@ -2269,6 +2276,7 @@ function toggleConfigPanel(forceOpen) {
         updateMemoryPreview();
         updateAvatarBoundsInfo();
     }
+    refreshClickThroughState();
 }
 
 // ============================================================================
@@ -2880,8 +2888,11 @@ function initOverlay() {
         '#cfg-open-btn',
         '#onboarding-modal'
     ];
+    let lastPointerX = null;
+    let lastPointerY = null;
     function isOverInteractive(x, y) {
         if (isPanelInteracting) return true;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
         for (const sel of clickThroughZones) {
             const el = document.querySelector(sel);
             if (!el) continue;
@@ -2895,7 +2906,20 @@ function initOverlay() {
     function setClickThrough(enable) {
         try { window.sarraAPI?.setIgnoreMouseEvents?.(enable); } catch (e) { console.warn('⚠️ click-through:', e); }
     }
+    refreshClickThroughHandler = () => {
+        if (lastPointerX === null || lastPointerY === null) {
+            const panel = document.getElementById('config-panel');
+            const modal = document.getElementById('onboarding-modal');
+            const panelOpen = Boolean(panel && panel.classList.contains('is-open'));
+            const modalOpen = Boolean(modal && getComputedStyle(modal).display !== 'none');
+            setClickThrough(!(panelOpen || modalOpen));
+            return;
+        }
+        setClickThrough(!isOverInteractive(lastPointerX, lastPointerY));
+    };
     window.addEventListener('mousemove', (e) => {
+        lastPointerX = e.clientX;
+        lastPointerY = e.clientY;
         setClickThrough(!isOverInteractive(e.clientX, e.clientY));
     });
     window.addEventListener('mouseleave', () => {
