@@ -7,6 +7,7 @@
     "start-server": "node server.js",
     "dev": "vite",
     "build": "vite build",
+    "setup-tts": "node scripts/setup-supertonic3.mjs",
     "electron-dev": "cross-env NODE_ENV=development electron .",
     "electron": "electron ."
   },
@@ -17,6 +18,7 @@
     "dotenv": "^18.0.10",
     "express": "^4.21.0",
     "screenshot-desktop": "^1.15.0",
+    "sherpa-onnx-node": "^2.0.3",
     "three": "^0.169.0"
   },
   "devDependencies": {

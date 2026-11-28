@@ -52,6 +52,7 @@ function getDemoCache(message) {
 // OVERLAY APP: Vision écran — capture backend + compression canvas.
 const SCREENSHOT_ENDPOINT = 'http://127.0.0.1:3000/api/screenshot';
 const ACTION_ENDPOINT = 'http://127.0.0.1:3000/api/action';
+const LOCAL_TTS_ENDPOINT = 'http://127.0.0.1:3000/api/tts';
 const SCREEN_VISION_ENABLED = () => localStorage.getItem('screenVision') !== 'false';
 // Une question qui parle de l'écran ne doit jamais être servie par le cache démo.
 const SCREEN_QUERY_RE = /(écran|ecran|\bvois\b|\bregarde\b|c'est quoi (ça|ca)|\bsouris\b|fenêtre|fenetre|\bpage\b|\bonglet\b)/i;
@@ -838,6 +839,7 @@ loader.load(
             Object.defineProperties(window.__sarra, Object.getOwnPropertyDescriptors({
                 scene, camera, renderer, vrm, lookTarget, gazeTarget,
                 animateLipSyncFromText, askSarra: askSarraDirect, askSarraDirect, speakWithBestVoice,
+                speakWithLocalTts, stopLocalTtsPlayback, splitFrenchSentences,
                 headTarget, headCurrent, headBaseTarget,
                 get headBaseDistance() { return headBaseDistance; },
                 resetHeadPose,
@@ -1340,10 +1342,10 @@ let alertShown = false;               // une seule alerte utilisateur par sessio
 premiumFailureCount = Number(sessionStorage.getItem('sarraPremiumFailureCount') || 0);
 premiumCooldownUntil = Number(sessionStorage.getItem('sarraPremiumCooldownUntil') || 0);
 
-// Toast discret et unique par session : évite de spammer l'interface.
-function showToast(message) {
-  if (alertShown) return;
-  alertShown = true;
+// Toast discret et unique par session (ou forcé pour erreur bloquante TTS local).
+function showToast(message, force = false) {
+  if (alertShown && !force) return;
+  if (!force) alertShown = true;
   const el = document.createElement('div');
   el.className = 'sarra-toast';
   el.textContent = message;
@@ -1374,7 +1376,13 @@ function pickBestFrenchVoice() {
 function getTtsProvider() {
     return document.getElementById('cfg-tts-provider')?.value
         || localStorage.getItem('ttsProvider')
-        || 'gemini-tts';
+        || 'local-tts';
+}
+
+function getLocalTtsVoice() {
+    return document.getElementById('cfg-local-tts-voice')?.value
+        || localStorage.getItem('localTtsVoice')
+        || 'F1';
 }
 
 function getElevenLabsKey() {
@@ -1580,11 +1588,292 @@ async function speakWithGeminiCascade(text, key, voiceName) {
     return false;
 }
 
+const FR_ABBREVIATIONS_RE = /(?:^|[\s(«"'])(?:M|Mme|Mmes|Mlle|Mlles|Dr|Prof|Pr|Sr|St|Ste|Mgr|Me|etc|cf|ex|env|av|apr|p|pp|n°|no|vol|fig|art|ch|chap|al|éd|J\.-C)\.\s*$/i;
+
+function splitFrenchSentences(text) {
+    const clean = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!clean) return [];
+    const rawParts = [];
+    let start = 0;
+    for (let i = 0; i < clean.length; i += 1) {
+        const ch = clean[i];
+        if (ch !== '.' && ch !== '!' && ch !== '?' && ch !== '…') continue;
+        // Points de suspension (...) : avancer jusqu'au dernier point
+        if (ch === '.' && clean[i + 1] === '.') continue;
+        // Nombres décimaux (ex: 3.14)
+        if (ch === '.' && i > 0 && /\d/.test(clean[i - 1]) && /\d/.test(clean[i + 1] || '')) continue;
+        // Initiale ou sigle interne (ex: J.-C., U.E.)
+        if (ch === '.' && clean[i + 1] === '-') continue;
+        const nextChar = clean[i + 1] || '';
+        if (nextChar && !/[\s»"')\]…]/.test(nextChar)) continue;
+        // Vérifier abréviation française (uniquement pour '.')
+        const candidate = clean.slice(start, i + 1);
+        if (ch === '.' && FR_ABBREVIATIONS_RE.test(candidate)) continue;
+        // Attendre éventuellement la fermeture de guillemet/parenthèse avant de couper
+        let end = i + 1;
+        while (end < clean.length && /[»"')\]…]/.test(clean[end])) end += 1;
+        if (end < clean.length && !/\s/.test(clean[end])) continue;
+        const piece = clean.slice(start, end).trim();
+        if (piece) rawParts.push(piece);
+        start = end;
+        while (start < clean.length && /\s/.test(clean[start])) start += 1;
+        i = start - 1;
+    }
+    const tail = clean.slice(start).trim();
+    if (tail) rawParts.push(tail);
+    if (rawParts.length <= 1) return rawParts;
+
+    // Fusionner les fragments trop courts (< 12 caractères) pour éviter des micro-chunks artificiels.
+    const merged = [];
+    for (const part of rawParts) {
+        if (!merged.length) {
+            merged.push(part);
+        } else if (part.length < 12) {
+            merged[merged.length - 1] = `${merged[merged.length - 1]} ${part}`;
+        } else if (merged[merged.length - 1].length < 12) {
+            merged[merged.length - 1] = `${merged[merged.length - 1]} ${part}`;
+        } else {
+            merged.push(part);
+        }
+    }
+    return merged;
+}
+
+let activeLocalAudioStop = null;
+let localTtsPlaybackSeq = 0;
+let sharedLocalAudioCtx = null;
+
+function stopLocalTtsPlayback() {
+    localTtsPlaybackSeq += 1;
+    if (typeof activeLocalAudioStop === 'function') {
+        const stopFn = activeLocalAudioStop;
+        activeLocalAudioStop = null;
+        stopFn('interruption');
+    }
+}
+
+function playLocalTtsAudio(blob, text) {
+    if (typeof activeLocalAudioStop === 'function') {
+        activeLocalAudioStop('nouvel audio local');
+    }
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.volume = 1.0;
+
+    const vrm = currentVrm;
+    const expressionManager = vrm?.expressionManager || null;
+    const track = buildVisemeTrack(String(text || ''));
+    const weights = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0, jawOpen: 0 };
+
+    let analyser = null;
+    let sourceNode = null;
+    let timeDomainData = null;
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx && typeof audio.addEventListener === 'function') {
+            if (!sharedLocalAudioCtx || sharedLocalAudioCtx.state === 'closed') {
+                sharedLocalAudioCtx = new AudioCtx();
+            }
+            if (sharedLocalAudioCtx.state === 'suspended') {
+                sharedLocalAudioCtx.resume().catch(() => {});
+            }
+            analyser = sharedLocalAudioCtx.createAnalyser();
+            analyser.fftSize = 512;
+            sourceNode = sharedLocalAudioCtx.createMediaElementSource(audio);
+            sourceNode.connect(analyser);
+            analyser.connect(sharedLocalAudioCtx.destination);
+            timeDomainData = new Float32Array(analyser.fftSize);
+        }
+    } catch (e) {
+        analyser = null;
+        sourceNode = null;
+        timeDomainData = null;
+    }
+
+    if (activeLipsyncStop) stopActiveLipsync('audio local');
+    isIdle = false;
+
+    return new Promise((resolve) => {
+        let done = false;
+        let frameId = 0;
+        let safetyTimer = 0;
+        let lastFrameAt = performance.now();
+
+        const finish = () => {
+            if (done) return;
+            done = true;
+            if (activeLocalAudioStop === finish) activeLocalAudioStop = null;
+            cancelAnimationFrame(frameId);
+            clearTimeout(safetyTimer);
+            try { audio.pause(); } catch { /* noop */ }
+            try { sourceNode?.disconnect(); } catch { /* noop */ }
+            try { analyser?.disconnect(); } catch { /* noop */ }
+            isIdle = true;
+            if (vrm) resetMouthMorphs();
+            URL.revokeObjectURL(url);
+            resolve();
+        };
+
+        activeLocalAudioStop = finish;
+
+        const tick = (now) => {
+            if (done) return;
+            const dt = Math.min(0.05, Math.max(0.001, (now - lastFrameAt) / 1000));
+            lastFrameAt = now;
+
+            if (expressionManager && track.entries.length) {
+                const dur = Number.isFinite(audio.duration) && audio.duration > 0
+                    ? audio.duration
+                    : Math.max(0.6, track.entries.length / LIPSYNC_CHARS_PER_SECOND);
+                const cur = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+                const playhead = Math.min(track.totalWeight, Math.max(0, (cur / dur) * track.totalWeight));
+
+                let current = track.entries[0];
+                let next = null;
+                for (let idx = 0; idx < track.entries.length; idx += 1) {
+                    const entry = track.entries[idx];
+                    if (playhead >= entry.start) {
+                        current = entry;
+                        next = track.entries[idx + 1] || null;
+                    } else {
+                        break;
+                    }
+                }
+
+                let rmsGate = audio.paused ? 0 : 1.0;
+                if (analyser && timeDomainData) {
+                    analyser.getFloatTimeDomainData(timeDomainData);
+                    let sumSq = 0;
+                    for (let k = 0; k < timeDomainData.length; k += 1) {
+                        const s = timeDomainData[k];
+                        sumSq += s * s;
+                    }
+                    const rms = Math.sqrt(sumSq / timeDomainData.length);
+                    const threshold = Math.max(0, Math.min(0.25, Number.parseFloat(localStorage.getItem('lipThreshold') || '0.02') || 0.02));
+                    rmsGate = rms <= threshold ? 0 : Math.min(1.25, (rms - threshold) / Math.max(0.05, 0.20 - threshold));
+                }
+
+                const targets = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+                let jawTarget = 0;
+                if (current && rmsGate > 0) {
+                    const segDur = Math.max(0.01, current.weight);
+                    const progress = Math.min(1, Math.max(0, (playhead - current.start) / segDur));
+                    const envelope = Math.sin(progress * Math.PI) * rmsGate;
+                    if (current.viseme) targets[current.viseme] = LIPSYNC_GAIN * envelope;
+                    jawTarget = current.jaw * envelope;
+                    if (next && next.viseme && progress > 0.7) {
+                        const blend = ((progress - 0.7) / 0.3) * 0.5 * rmsGate;
+                        targets[next.viseme] = Math.max(targets[next.viseme], LIPSYNC_GAIN * blend);
+                    }
+                }
+
+                const applied = {};
+                for (const channel of LIPSYNC_CHANNELS) {
+                    weights[channel] = smoothValue(
+                        weights[channel],
+                        targets[channel],
+                        dt,
+                        LIPSYNC_CONFIG.attackSeconds,
+                        LIPSYNC_CONFIG.releaseSeconds
+                    );
+                    applied[channel] = weights[channel];
+                    expressionManager.setValue(channel, weights[channel]);
+                }
+                weights.jawOpen = smoothValue(
+                    weights.jawOpen,
+                    jawTarget,
+                    dt,
+                    LIPSYNC_CONFIG.attackSeconds,
+                    LIPSYNC_CONFIG.releaseSeconds
+                );
+                applied.jawOpen = weights.jawOpen * LIPSYNC_JAW_WEIGHT;
+                expressionManager.setValue('jawOpen', applied.jawOpen);
+                applyMouthMorphs(applied);
+            }
+
+            frameId = requestAnimationFrame(tick);
+        };
+
+        audio.onended = finish;
+        audio.onerror = finish;
+        frameId = requestAnimationFrame(tick);
+        audio.play().catch((error) => {
+            console.error('❌ Lecture audio TTS local:', error);
+            finish();
+        });
+        safetyTimer = setTimeout(finish, Math.max(12000, String(text || '').length * 180));
+    });
+}
+
+async function fetchLocalTtsWav(chunkText, voice, lang, signal) {
+    const response = await fetch(LOCAL_TTS_ENDPOINT, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Sarra-Client': 'sarra-desktop'
+        },
+        body: JSON.stringify({ text: chunkText, voice, lang }),
+        signal: signal || AbortSignal.timeout(15000)
+    });
+    if (!response.ok) {
+        let details = '';
+        let code = '';
+        try {
+            const errJson = await response.json();
+            code = errJson?.code || errJson?.error || '';
+            details = errJson?.message || '';
+        } catch { /* ignore */ }
+        const error = new Error(`TTS local HTTP ${response.status}${code ? ` (${code})` : ''}${details ? `: ${details}` : ''}`);
+        error.status = response.status;
+        error.code = code;
+        throw error;
+    }
+    return response.blob();
+}
+
+async function speakWithLocalTts(text, options = {}) {
+    const cleanText = String(text || '').trim();
+    if (!cleanText) return;
+    stopLocalTtsPlayback();
+    const mySeq = localTtsPlaybackSeq;
+    const voice = options.voice || getLocalTtsVoice();
+    const lang = options.lang || 'fr';
+    const chunks = splitFrenchSentences(cleanText);
+    if (!chunks.length) return;
+
+    let nextPromise = fetchLocalTtsWav(chunks[0], voice, lang, options.signal);
+    for (let i = 0; i < chunks.length; i += 1) {
+        if (mySeq !== localTtsPlaybackSeq) break;
+        const blob = await nextPromise;
+        if (mySeq !== localTtsPlaybackSeq) break;
+        // Pré-synthèse parallèle de la phrase suivante pendant la lecture de la courante.
+        nextPromise = (i + 1 < chunks.length)
+            ? fetchLocalTtsWav(chunks[i + 1], voice, lang, options.signal).catch((err) => ({ __prefetchError: err }))
+            : null;
+        if (blob?.__prefetchError) throw blob.__prefetchError;
+        await playLocalTtsAudio(blob, chunks[i]);
+    }
+}
+
 function speakWithBestVoice(text) {
     if (!text) return Promise.resolve();
     const provider = getTtsProvider();
     const fallbackNever = localStorage.getItem('ttsFallback') === 'never';
-    // Gemini TTS est le moteur par défaut ; cascade puis repli navigateur.
+
+    if (provider === 'local-tts') {
+        return speakWithLocalTts(text).catch((error) => {
+            console.error('❌ TTS local indisponible (aucun repli cloud):', error);
+            showToast(`❌ Voix locale hors-ligne indisponible : ${error?.message || 'vérifiez server.js et models/supertonic-3'}.`, true);
+            if (fallbackNever) {
+                console.error('❌ TTS local indisponible — repli navigateur désactivé (ttsFallback=never).');
+                return undefined;
+            }
+            console.warn('⚠️ TTS local indisponible — repli voix navigateur.');
+            return speakWithBrowserVoice(text);
+        });
+    }
+
+    // Gemini TTS (si sélectionné manuellement) ; cascade puis repli navigateur.
     const geminiTTSKey = localStorage.getItem('geminiTTSKey')
         || localStorage.getItem('geminiKey')
         || localStorage.getItem('apiKey')
@@ -3004,8 +3293,8 @@ function syncAltProvidersVisibility() {
     const details = document.getElementById('alt-providers-details');
     if (!details) return;
     const reasoner = document.getElementById('cfg-reasoning-provider')?.value || localStorage.getItem('reasoningProvider') || 'gemini';
-    const tts = document.getElementById('cfg-tts-provider')?.value || localStorage.getItem('ttsProvider') || 'gemini-tts';
-    if (reasoner !== 'gemini' || tts !== 'gemini-tts') {
+    const tts = document.getElementById('cfg-tts-provider')?.value || localStorage.getItem('ttsProvider') || 'local-tts';
+    if (reasoner !== 'gemini' || (tts !== 'local-tts' && tts !== 'gemini-tts')) {
         details.open = true;
     }
 }
@@ -3164,6 +3453,10 @@ function initConfigPanelV2() {
         localStorage.setItem('selectedVoice', e.target.value);
         markPanelDirty();
     });
+    document.getElementById('cfg-local-tts-voice')?.addEventListener('change', (e) => {
+        localStorage.setItem('localTtsVoice', e.target.value || 'F1');
+        markPanelDirty();
+    });
     document.getElementById('cfg-elevenlabs-voice')?.addEventListener('change', (e) => {
         localStorage.setItem('elevenVoiceId', e.target.value);
         markPanelDirty();
@@ -3317,6 +3610,10 @@ function initConfigPanelV2() {
                 else if (provider === 'gemini-tts') {
                     const key = value('cfg-gemini-tts-key') || value('cfg-gemini-key') || resolveDemoApiKey();
                     result = await testGeminiTTSKey(key);
+                } else if (provider === 'local-tts') {
+                    const voice = value('cfg-local-tts-voice') || 'F1';
+                    await speakWithLocalTts('Bonjour, je suis Sarra, votre assistante vocale locale.', { voice });
+                    result = { ok: true, message: `✅ TTS local (${voice})` };
                 } else if (provider === 'browser-voice') {
                     testBrowserVoice();
                     if (statusEl) {
@@ -3331,7 +3628,7 @@ function initConfigPanelV2() {
                 }
             } catch (e) {
                 if (statusEl) {
-                    statusEl.textContent = '❌ Erreur réseau';
+                    statusEl.textContent = e?.message ? `❌ ${e.message}` : '❌ Erreur réseau';
                     statusEl.className = 'status-indicator error';
                 }
             } finally {
@@ -3643,7 +3940,10 @@ function loadConfigValuesV2() {
     get('cfg-reasoning-model', 'reasoningModel', GEMINI_MODEL_DEMO);
 
     if (localStorage.getItem('ttsProvider') === null) {
-        localStorage.setItem('ttsProvider', 'gemini-tts');
+        localStorage.setItem('ttsProvider', 'local-tts');
+    }
+    if (localStorage.getItem('localTtsVoice') === null) {
+        localStorage.setItem('localTtsVoice', 'F1');
     }
     if (localStorage.getItem('geminiTTSVoice') === null) {
         localStorage.setItem('geminiTTSVoice', localStorage.getItem('geminiVoice') || 'Kore');
@@ -3651,7 +3951,8 @@ function loadConfigValuesV2() {
     if (localStorage.getItem('geminiVoice') === null) {
         localStorage.setItem('geminiVoice', localStorage.getItem('geminiTTSVoice') || 'Kore');
     }
-    get('cfg-tts-provider', 'ttsProvider', 'gemini-tts');
+    get('cfg-tts-provider', 'ttsProvider', 'local-tts');
+    get('cfg-local-tts-voice', 'localTtsVoice', 'F1');
 
     const geminiKey = localStorage.getItem('geminiKey') || localStorage.getItem('apiKey') || '';
     if (localStorage.getItem('geminiTTSKey') === null) {
@@ -3753,6 +4054,7 @@ function saveAllConfigV2() {
     set('cfg-elevenlabs-key', 'elevenlabsKey');
     set('cfg-gemini-tts-key', 'geminiTTSKey');
     set('cfg-browser-voice', 'selectedVoice');
+    set('cfg-local-tts-voice', 'localTtsVoice');
     set('cfg-elevenlabs-voice', 'elevenVoiceId');
     set('cfg-gemini-tts-voice', 'geminiTTSVoice');
     set('cfg-reasoning-provider', 'reasoningProvider');
@@ -3817,7 +4119,7 @@ function factoryReset() {
         'apiKey', 'ttsKey', 'coreDirectives', 'memoryEnabled', 'memorySize', 'lipSensitivity', 'lipSpeed', 'lipJaw',
         'lipSmoothing', 'lipThreshold', 'lipTeeth', 'emoBlinkRate', 'emoBlink', 'emoNeck', 'emoBreath',
         'emoGaze', 'emoBrow', 'emoAngry', 'reasoningProvider', 'reasoningModel', 'ttsProvider',
-        'autoFallback', 'screenVision', 'demoMode', 'selectedVoice', 'elevenVoiceId', 'geminiVoice',
+        'autoFallback', 'screenVision', 'demoMode', 'selectedVoice', 'localTtsVoice', 'elevenVoiceId', 'geminiVoice',
         'geminiTTSVoice', 'avatarMemory', 'sarra_window_state', PANEL_STATE_KEY
     ];
     keys.forEach((k) => localStorage.removeItem(k));
@@ -3911,5 +4213,6 @@ if (document.readyState === 'loading') {
 window.askSarra = askSarraDirect;
 window.askSarraDirect = askSarraDirect;
 window.speakWithBestVoice = speakWithBestVoice;
+window.speakWithLocalTts = speakWithLocalTts;
 window.__sarra = window.__sarra || {};
 window.__sarra.toggleConfigPanel = toggleConfigPanel;

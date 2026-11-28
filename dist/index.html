@@ -797,7 +797,7 @@
             color: #ff7373;
         }
     </style>
-  <script type="module" crossorigin src="./assets/index-aqLf9csl.js"></script>
+  <script type="module" crossorigin src="./assets/index-BnS6uKmg.js"></script>
 </head>
 <body>
     <div id="avatar-container">
@@ -887,7 +887,8 @@
                     <div class="row">
                         <label class="field">Synthèse vocale (Voix)
                             <select id="cfg-tts-provider">
-                                <option value="gemini-tts">Gemini TTS · voix neurale HD (par défaut)</option>
+                                <option value="local-tts">TTS Local Hors-ligne · Supertonic 3 (par défaut)</option>
+                                <option value="gemini-tts">Gemini TTS · voix neurale HD</option>
                                 <option value="elevenlabs">ElevenLabs · voix ultra-réaliste</option>
                                 <option value="browser">Navigateur / Système · Web Speech</option>
                             </select>
@@ -1000,6 +1001,29 @@
                             <div class="inline">
                                 <button type="button" class="btn-test" data-test="elevenlabs">Tester ElevenLabs</button>
                                 <span id="status-elevenlabs" class="status-indicator" aria-live="polite"></span>
+                            </div>
+
+                            <div class="row">
+                                <label class="field">Voix locale hors-ligne (Supertonic 3)
+                                    <select id="cfg-local-tts-voice">
+                                        <option value="F1">F1 · Féminine claire (défaut)</option>
+                                        <option value="F2">F2 · Féminine douce</option>
+                                        <option value="F3">F3 · Féminine posée</option>
+                                        <option value="F4">F4 · Féminine dynamique</option>
+                                        <option value="F5">F5 · Féminine chaleureuse</option>
+                                        <option value="M1">M1 · Masculine posée</option>
+                                        <option value="M2">M2 · Masculine grave</option>
+                                        <option value="M3">M3 · Masculine claire</option>
+                                        <option value="M4">M4 · Masculine dynamique</option>
+                                        <option value="M5">M5 · Masculine narration</option>
+                                    </select>
+                                </label>
+                                <div class="field" style="align-self:end">
+                                    <div class="inline">
+                                        <button type="button" class="btn-test" data-test="local-tts">Écouter TTS local</button>
+                                        <span id="status-local-tts" class="status-indicator" aria-live="polite"></span>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="row">
